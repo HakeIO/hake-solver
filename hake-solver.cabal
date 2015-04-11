@@ -19,15 +19,15 @@ library
   hs-source-dirs:
     src
   exposed-modules:
+    Development.Hake.OrderedConfVar
     Development.Hake.Solver
+    Development.Hake.TraversableCondition
   other-modules:
   build-depends:
     base                       >= 4.7 && < 5,
     binary,
     Cabal,
     containers,
-    deepseq,
-    hashable,
     mtl,
     pretty,
     z3
@@ -50,6 +50,7 @@ test-suite solver-test
     containers,
     filepath,
     hake-solver,
+    mtl,
     tar,
     text,
     transformers,

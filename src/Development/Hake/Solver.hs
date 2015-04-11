@@ -10,7 +10,6 @@ import Control.Monad.State.Strict as State
 import qualified Data.List as List
 import Data.Map.Lazy (Map)
 import qualified Data.Map.Lazy as Map
-import Data.Monoid
 import Distribution.Package (Dependency(..), PackageIdentifier(..), PackageName(..))
 import Distribution.PackageDescription (CondTree(..), Condition(..), ConfVar(..), FlagName(..), GenericPackageDescription(condLibrary))
 import Distribution.Text (Text, disp)
@@ -18,6 +17,9 @@ import Distribution.Version
 import Text.PrettyPrint hiding ((<>), ($$))
 import Z3.Monad (AST, Z3, Z3Env)
 import qualified Z3.Monad as Z3
+
+import Development.Hake.OrderedConfVar
+import Development.Hake.TraversableCondition
 
 import Debug.Trace (trace)
 
@@ -30,20 +32,6 @@ renderConfVar (Arch x) = "arch##" ++ renderOneLine x
 renderConfVar (Flag (FlagName x)) = "flag##" ++ x
 renderConfVar (Impl x _) = "impl##" ++ renderOneLine x -- ++ y
 
-newtype OrderedConfVar = OrderedConfVar ConfVar deriving Eq
-
-instance Ord OrderedConfVar where
-  l `compare` r | l == r = EQ
-  OrderedConfVar l `compare` OrderedConfVar r = case (l, r) of
-    (OS     x, OS     y) -> compare x y
-    (OS     _,        _) -> LT
-    (Arch   x, Arch   y) -> compare x y
-    (Arch   _,        _) -> LT
-    (Flag   x, Flag   y) -> compare x y
-    (Flag   _,        _) -> LT
-    (Impl x _, Impl y _) -> compare x y
-    (Impl _ _,        _) -> LT
-
 -- | Convert a Cabal condition tree into a Z3 expression
 condL :: Z3.MonadZ3 m => Condition AST -> m AST
 condL (Var c)     = return c
@@ -52,32 +40,6 @@ condL (Lit False) = Z3.mkFalse
 condL (CNot c)    = Z3.mkNot =<< condL c
 condL (COr x y)   = Z3.mkOr =<< traverse condL [x, y]
 condL (CAnd x y)  = Z3.mkAnd =<< traverse condL [x, y]
-
-newtype TraversableCondition a = TraversableCondition {unTC :: Condition a}
-
-instance Functor TraversableCondition where
-  f `fmap` TraversableCondition a = TraversableCondition (g a) where
-    g (Var c) = Var (f c)
-    g (Lit c) = Lit c
-    g (CNot c) = CNot (g c)
-    g (COr c d) = COr (g c) (g d)
-    g (CAnd c d) = CAnd (g c) (g d)
-
-instance Foldable TraversableCondition where
-  f `foldMap` TraversableCondition a = g a where
-    g (Var c) = f c
-    g (Lit _) = mempty
-    g (CNot c) = g c
-    g (COr c d) = g c <> g d
-    g (CAnd c d) = g c <> g d
-
-instance Traversable TraversableCondition where
-  f `traverse` TraversableCondition a = TraversableCondition <$> g a where
-    g (Var c) = Var <$> f c
-    g (Lit c) = pure $ Lit c
-    g (CNot c) = CNot <$> g c
-    g (COr c d) = COr <$> g c <*> g d
-    g (CAnd c d) = CAnd <$> g c <*> g d
 
 builtinPackages :: [PackageName]
 builtinPackages = map PackageName $
