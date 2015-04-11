@@ -51,6 +51,7 @@ test-suite solver-test
     filepath,
     hake-solver,
     mtl,
+    process,
     tar,
     text,
     transformers,

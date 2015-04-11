@@ -8,8 +8,10 @@ import Control.Monad.IO.Class
 import Control.Monad.State.Lazy (state)
 import Data.Map.Lazy as Map
 import Data.Traversable
+import System.Exit (ExitCode(ExitSuccess))
 import System.FilePath
 import System.IO
+import System.Process (readCreateProcessWithExitCode, shell)
 import Z3.Monad as Z3
 
 import qualified Data.Text as T
@@ -31,8 +33,13 @@ import Development.Hake.Solver
 
 import qualified Data.ByteString.Lazy as Bl
 
-packageTarball :: String
-packageTarball = "/Users/nhowell/Library/Haskell/repo-cache/hackage.haskell.org/00-index.tar"
+packageTarball :: IO String
+packageTarball = do
+  let cmd = shell "grep remote-repo-cache ~/.cabal/config | awk '{print $2}'"
+  (ExitSuccess, dirs, _) <- readCreateProcessWithExitCode cmd ""
+  case lines dirs of
+    [dir] -> return $ combine dir "hackage.haskell.org/00-index.tar"
+    _ -> fail "uhm"
 
 foldEntriesM :: (Exception e, MonadIO m) => (a -> Entry -> m a) -> a -> Entries e -> m a
 foldEntriesM f = step where
