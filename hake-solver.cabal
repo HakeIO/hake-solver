@@ -1,0 +1,35 @@
+name:                hake-solver
+version:             0.1
+synopsis:            Hake Constraint Solver
+description:         The Hake Build System is a cloud enabled build system for Haskell.
+license:             BSD3
+license-file:        LICENSE
+author:              Steve Severance, Nathan Howell
+maintainer:          sseverance@alphaheavy.com, nhowell@alphaheavy.com
+homepage:            https://github.com/HakeIO/hake-solver
+bug-reports:         https://github.com/HakeIO/hake-solver/issues
+category:            Development
+
+build-type:          Simple
+cabal-version:       >= 1.10
+
+library
+  default-language:
+    Haskell2010
+  hs-source-dirs:
+    src
+  exposed-modules:
+    Development.Hake.Solver
+  other-modules:
+  build-depends:
+    base                       >= 4.7 && < 5,
+    binary,
+    deepseq,
+    hashable,
+    z3
+  ghc-options:
+    -Wall
+
+source-repository head
+  type:     git
+  location: https://github.com/HakeIO/hake-solver.git
