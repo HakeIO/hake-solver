@@ -75,20 +75,47 @@ data HakeSolverState = HakeSolverState
   , hakeSolverPkgs    :: !(Map PackageIdentifier Z3.AST)
   }
 
-newtype HakeSolverT m a = HakeSolverT {runHakeSolverT :: StateT HakeSolverState m a}
+newtype HakeSolverT m a = HakeSolverT {unHakeSolverT :: StateT HakeSolverState m a}
   deriving (Applicative, Functor, Monad, MonadIO, MonadTrans, MonadState HakeSolverState)
 
 instance Z3.MonadZ3 m => Z3.MonadZ3 (HakeSolverT m) where
   getSolver = lift Z3.getSolver
   getContext = lift Z3.getContext
 
-evalHakeSolverT
+runHakeSolverT
   :: HakeSolverState
   -> Z3Env
   -> HakeSolverT Z3 a
   -> IO (a, HakeSolverState)
-evalHakeSolverT st env app = do
-  let script = runStateT (runHakeSolverT app) st
+runHakeSolverT st env app = do
+  let script = runStateT (unHakeSolverT app) st
+  Z3.evalZ3WithEnv script env
+
+execHakeSolverT
+  :: HakeSolverState
+  -> Z3Env
+  -> HakeSolverT Z3 a
+  -> IO HakeSolverState
+execHakeSolverT st env app = do
+  let script = execStateT (unHakeSolverT app) st
+  Z3.evalZ3WithEnv script env
+
+runLocalHakeSolverT
+  :: HakeSolverState
+  -> Z3Env
+  -> HakeSolverT Z3 a
+  -> IO (a, HakeSolverState)
+runLocalHakeSolverT st env app = do
+  let script = runStateT (unHakeSolverT app) st
+  Z3.evalZ3WithEnv (Z3.local script) env
+
+execLocalHakeSolverT
+  :: HakeSolverState
+  -> Z3Env
+  -> HakeSolverT Z3 a
+  -> IO HakeSolverState
+execLocalHakeSolverT st env app = do
+  let script = execStateT (unHakeSolverT app) st
   Z3.evalZ3WithEnv (Z3.local script) env
 
 getConfVar :: PackageName -> ConfVar -> HakeSolverT Z3 AST
