@@ -8,8 +8,8 @@ before_install:
  - export PATH=/opt/ghc/$GHCVER/bin:/opt/cabal/1.22/bin:/opt/alex/3.1.4/bin:/opt/happy/1.19.3/bin:$PATH
  - travis_retry curl -o /tmp/z3.zip 'http://download-codeplex.sec.s-msft.com/Download/Release?ProjectName=z3&DownloadId=1441362&FileTime=130718577284870000&Build=20988'
  - unzip /tmp/z3.zip -d /tmp/z3
- - find /tmp/z3 -type d -name include -mindepth 2 -maxdepth 2 -exec sh -c 'cp {}/*.h /usr/local/include/' \;
- - find /tmp/z3 -type f -name 'lib*' -mindepth 3 -maxdepth 3 -exec cp {} /usr/local/lib/ \;
+ - find /tmp/z3 -name include -mindepth 2 -maxdepth 2 -type d -print0 | sudo xargs -0 -I{} sh -c 'cp {}/*.h /usr/local/include/'
+ - find /tmp/z3 -name 'lib*' -mindepth 3 -maxdepth 3 -type f -print0 | sudo xargs -0 -I{} cp {} /usr/local/lib/ \;
 
 install:
  - cabal update
