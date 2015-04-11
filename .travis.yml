@@ -1,0 +1,32 @@
+env:
+ - GHCVER=7.10.1
+
+before_install:
+ - travis_retry sudo add-apt-repository -y ppa:hvr/ghc
+ - travis_retry sudo apt-get update
+ - travis_retry sudo apt-get install cabal-install-1.22 ghc-$GHCVER alex-3.1.4 happy-1.19.3
+ - export PATH=/opt/ghc/$GHCVER/bin:/opt/cabal/1.22/bin:/opt/alex/3.1.4/bin:/opt/happy/1.19.3/bin:$PATH
+ - travis_retry curl -o /tmp/z3.zip 'http://download-codeplex.sec.s-msft.com/Download/Release?ProjectName=z3&DownloadId=1441362&FileTime=130718577284870000&Build=20988'
+ - unzip /tmp/z3.zip -d /tmp/z3
+ - find /tmp/z3 -type d -name include -mindepth 2 -maxdepth 2 -exec sh -c 'cp {}/*.h /usr/local/include/' \;
+ - find /tmp/z3 -type f -name 'lib*' -mindepth 3 -maxdepth 3 -exec cp {} /usr/local/lib/ \;
+
+install:
+ - cabal update
+ - cabal install --only-dependencies --enable-tests --enable-benchmarks
+
+script:
+ - cabal configure --enable-tests --enable-benchmarks -v2
+ - cabal build
+ - cabal test
+ - cabal check
+ - cabal sdist
+
+ - export SRC_TGZ=$(cabal info . | awk '{print $2 ".tar.gz";exit}') ;
+   cd dist/;
+   if [ -f "$SRC_TGZ" ]; then
+      cabal install "$SRC_TGZ";
+   else
+      echo "expected '$SRC_TGZ' not found";
+      exit 1;
+   fi
