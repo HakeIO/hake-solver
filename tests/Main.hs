@@ -102,6 +102,7 @@ main = do
   st <- execHakeSolverT defaultSolverState env loadGlobalDatabase
 
   let prog = do
+        setASTPrintMode Z3_PRINT_SMTLIB2_COMPLIANT
         x <- getDependency $ Dependency (PackageName "Coroutine") anyVersion
         assert x
         (res, mmodel) <- getModel

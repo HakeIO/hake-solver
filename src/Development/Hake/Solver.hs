@@ -7,10 +7,10 @@ module Development.Hake.Solver where
 
 import Control.Monad.Trans
 import Control.Monad.State.Strict as State
-import Data.Foldable
 import qualified Data.List as List
 import Data.Map.Lazy (Map)
 import qualified Data.Map.Lazy as Map
+import Data.Traversable
 import Distribution.Package (Dependency(..), PackageIdentifier(..), PackageName(..))
 import Distribution.PackageDescription (CondTree(..), Condition(..), ConfVar(..), FlagName(..), GenericPackageDescription(condLibrary))
 import Distribution.Text (Text, disp)
@@ -132,35 +132,21 @@ getConfVar pkg k = do
       put st{hakeSolverVars = Map.insert k' v hakeSolverVars}
       return v
 
-mkAndElse :: Foldable t => (a -> HakeSolverT Z3 AST) -> t a -> HakeSolverT Z3 AST
-mkAndElse f xs = do
-  true <- Z3.mkTrue
-  let g a b = do
-        a' <- f a
-        Z3.mkAnd [a', b]
-  foldrM g true xs
-
-mkOrElse :: Foldable t => (a -> HakeSolverT Z3 AST) -> t a -> HakeSolverT Z3 AST
-mkOrElse f xs = do
-  false <- Z3.mkFalse
-  let g a b = do
-        a' <- f a
-        Z3.mkOr [a', b]
-  foldrM g false xs
-
-getCondTree :: PackageName -> CondTree ConfVar [Dependency] a -> HakeSolverT Z3 AST
+getCondTree :: Show a => PackageName -> CondTree ConfVar [Dependency] a -> HakeSolverT Z3 (Maybe AST)
 getCondTree pkg CondNode{condTreeConstraints, condTreeComponents} = do
-  deps <- mkAndElse getDependency condTreeConstraints
-  components <- forM condTreeComponents $ \ (cond, child, _mchild) -> do
-    condVar  <- condL . unTC =<< traverse (getConfVar pkg) (TraversableCondition cond)
-    childVar <- getCondTree pkg child
-    Z3.mkAnd [condVar, childVar]
-
-  if List.null components
-    then return deps
-    else do
-      c <- Z3.mkOr components
-      Z3.mkAnd [deps, c]
+  case (condTreeConstraints, condTreeComponents) of
+    ([], _ ) -> return Nothing -- no constraints, we're good to go
+    (xs, []) -> fmap Just . Z3.mkAnd =<< traverse getDependency xs
+    (xs, ys) -> Just <$> do
+      xs' <- Z3.mkAnd =<< traverse getDependency xs
+      ys' <- Z3.mkAnd =<< do
+        for ys $ \ (cond, child, _mchild) -> do
+          condVar  <- condL . unTC =<< traverse (getConfVar pkg) (TraversableCondition cond)
+          mchildVar <- getCondTree pkg child
+          case mchildVar of
+            Just childVar -> Z3.mkAnd [condVar, childVar]
+            Nothing -> return condVar
+      Z3.mkAnd [xs', ys']
 
 getDependency :: Dependency -> HakeSolverT Z3 AST
 getDependency (Dependency name verRange)
@@ -169,28 +155,25 @@ getDependency (Dependency name verRange)
       pkgs <- gets hakeSolverGenDesc
       case Map.lookup name pkgs of
         Just vers -> do
-          let ixs, oxs :: [Version]
-              (ixs, oxs) = List.partition (`withinRange` verRange) (Map.keys vers)
-
+          -- select at least one package in version range. this will be limited to
+          -- one distinct version by an implies assertion in the same scope
           let somePackage :: [Version] -> HakeSolverT Z3 AST
               somePackage xs = do
                 let packages = PackageIdentifier name <$> xs
-                mkOrElse getPackage packages
+                Z3.mkOr =<< traverse getPackage packages
 
-          -- select at least one package in version range. this will be limited to
-          -- one distinct version by an implies assertion in the same scope
-          ixs' <- somePackage ixs
-
-          -- avoid all packages out of range
-          oxs' <- Z3.mkNot =<< somePackage oxs
-
-          -- and the combined rule
-          Z3.mkAnd [ixs', oxs']
+          case List.partition (`withinRange` verRange) (Map.keys vers) of
+            ([], _ ) -> Z3.mkFalse -- no versions within range
+            (xs, []) -> somePackage xs
+            (xs, ys) -> do
+              xs' <- somePackage xs
+              -- avoid all packages out of range
+              ys' <- Z3.mkNot =<< somePackage ys
+              Z3.mkAnd [xs', ys']
 
         Nothing -> do
-          liftIO . putStrLn $ "missing: " ++ show name
-          -- TODO: replace with Z3.mkFalse when the entire package database is loaded
-          Z3.mkTrue
+          liftIO . putStrLn $ "missing package: " ++ show name
+          Z3.mkFalse
 
 getPackage :: PackageIdentifier -> HakeSolverT Z3 AST
 getPackage pkgId
@@ -210,15 +193,16 @@ getPackage pkgId
               -- getCondTree may make recursive calls into getPackage. I'm not sure if Cabal internally supports
               -- bidirectional dependencies (parent <=> child) so it may be better to insert a Z3.false constant instead.
               State.modify $ \ s@HakeSolverState{hakeSolverPkgs = pkgs} -> s{hakeSolverPkgs = Map.insert pkgId self pkgs}
-              deps <- getCondTree (pkgName pkgId) condNode
-              self' <- Z3.mkAnd [self, deps]
+              mdeps <- getCondTree (pkgName pkgId) condNode
+              self' <- case mdeps of
+                Just deps -> Z3.mkImplies self deps
+                Nothing -> return self
               -- other packages should infer our dependencies, make them known
               State.modify $ \ s@HakeSolverState{hakeSolverPkgs = pkgs} -> s{hakeSolverPkgs = Map.insert pkgId self' pkgs}
               return $! self'
 
           -- pretend we can always build executables (like cpphs) for now
           | otherwise -> Z3.mkTrue
-
 
 getDistinctVersion :: Dependency -> HakeSolverT Z3 AST
 getDistinctVersion (Dependency pkgName _) = do
@@ -229,9 +213,10 @@ getDistinctVersion (Dependency pkgName _) = do
     -- 1) only a single version of the package is selected, regardless of constraints
     -- 2) no version of the package is selected
     Just k  -> do
-      t <- Z3.mkTrue
-      e <- Z3.mkDistinct $ Map.elems k
-      Z3.mkOr [e, t]
+      -- t <- Z3.mkTrue
+      e <- Z3.mkOr $ Map.elems k
+      -- Z3.mkOr [e, t]
+      return e
     Nothing -> trace ("assertDistinctVersion couldn't find: " ++ show pkgName) $ Z3.mkFalse
 
 getLatestVersion :: PackageName -> HakeSolverT Z3 (Z3.Result, Maybe PackageIdentifier)
