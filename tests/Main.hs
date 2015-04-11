@@ -5,7 +5,9 @@ module Main where
 import Codec.Archive.Tar as Tar
 import Control.Exception (Exception, throwIO)
 import Control.Monad.IO.Class
+import Control.Monad.State.Lazy (state)
 import Data.Map.Lazy as Map
+import Data.Traversable
 import System.FilePath
 import System.IO
 import Z3.Monad as Z3
@@ -25,6 +27,8 @@ import Distribution.PackageDescription.PrettyPrint (showGenericPackageDescriptio
 import Distribution.Text as Dt
 import Distribution.Version
 
+import Development.Hake.Solver
+
 import qualified Data.ByteString.Lazy as Bl
 
 packageTarball :: String
@@ -36,7 +40,16 @@ foldEntriesM f = step where
   step s Tar.Done = return s
   step _ (Fail e) = liftIO $ throwIO e
 
-step !agg e
+takeEntries :: Int -> Entries e -> Entries e
+takeEntries 0 _ = Tar.Done
+takeEntries i (Next e es) = Next e (takeEntries (i-1) es)
+takeEntries _ x = x
+
+loadPackageDescriptions
+  :: Map PackageIdentifier GenericPackageDescription
+  -> Entry
+  -> IO (Map PackageIdentifier GenericPackageDescription)
+loadPackageDescriptions !agg e
   | ".cabal" <- takeExtension (entryPath e)
   , NormalFile lbs _fs <- entryContent e
   , ParseOk _ gpd <- parsePackageDescription (Tl.unpack (Tl.decodeUtf8With T.ignore lbs)) = do
@@ -49,11 +62,13 @@ step !agg e
       hFlush stdout
       return agg
 
-globalDatabase :: Z3 ()
-globalDatabase = do
-  entries <- liftIO $ Tar.read <$> Bl.readFile packageTarball
-  gpdMap <- liftIO $ foldEntriesM step Map.empty entries
-  return ()
+loadGlobalDatabase :: HakeSolverT Z3 ()
+loadGlobalDatabase = do
+  entries <- liftIO $ Tar.read <$> (Bl.readFile =<< packageTarball)
+  let entries' = takeEntries 1000 entries
+  gpdMap <- liftIO $ foldEntriesM loadPackageDescriptions Map.empty entries'
+  let gpdHakeMap = splitPackageIdentifiers gpdMap
+  state (\ x -> ((), x{hakeSolverGenDesc = gpdHakeMap}))
 
 query :: Z3 (Result, Maybe String)
 query = do
@@ -62,15 +77,33 @@ query = do
   (res, mmodel) <- getModel
   case mmodel of
     Just model -> do
-     str <- modelToString model
-     return (res, Just str)
+      str <- modelToString model
+      return (res, Just str)
     Nothing -> return (res, Nothing)
+
+defaultSolverState :: HakeSolverState
+defaultSolverState =
+  HakeSolverState
+    { hakeSolverGenDesc = Map.empty
+    , hakeSolverVars = Map.empty
+    , hakeSolverPkgs = Map.empty
+    }
 
 main :: IO ()
 main = do
   env <- Z3.newEnv (Just QF_BV) stdOpts
-  evalZ3WithEnv globalDatabase env
-  (x, y) <- evalZ3WithEnv (local query) env
+  st <- execHakeSolverT defaultSolverState env loadGlobalDatabase
+
+  let prog = do
+        x <- getDependency $ Dependency (PackageName "Coroutine") anyVersion
+        assert x
+        (res, mmodel) <- getModel
+        case mmodel of
+          Just model -> do
+            str <- modelToString model
+            return (res, Just str)
+          Nothing -> return (res, Nothing)
+
+  (x, st') <- runLocalHakeSolverT st env prog
+
   print x
-  print y
-  return ()
