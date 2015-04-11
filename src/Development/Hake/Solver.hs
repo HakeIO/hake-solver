@@ -7,6 +7,7 @@ module Development.Hake.Solver where
 
 import Control.Monad.Trans
 import Control.Monad.State.Strict as State
+import Data.Foldable
 import qualified Data.List as List
 import Data.Map.Lazy (Map)
 import qualified Data.Map.Lazy as Map
@@ -131,9 +132,25 @@ getConfVar pkg k = do
       put st{hakeSolverVars = Map.insert k' v hakeSolverVars}
       return v
 
+mkAndElse :: Foldable t => (a -> HakeSolverT Z3 AST) -> t a -> HakeSolverT Z3 AST
+mkAndElse f xs = do
+  true <- Z3.mkTrue
+  let g a b = do
+        a' <- f a
+        Z3.mkAnd [a', b]
+  foldrM g true xs
+
+mkOrElse :: Foldable t => (a -> HakeSolverT Z3 AST) -> t a -> HakeSolverT Z3 AST
+mkOrElse f xs = do
+  false <- Z3.mkFalse
+  let g a b = do
+        a' <- f a
+        Z3.mkOr [a', b]
+  foldrM g false xs
+
 getCondTree :: PackageName -> CondTree ConfVar [Dependency] a -> HakeSolverT Z3 AST
 getCondTree pkg CondNode{condTreeConstraints, condTreeComponents} = do
-  deps <- Z3.mkAnd =<< traverse getDependency condTreeConstraints
+  deps <- mkAndElse getDependency condTreeConstraints
   components <- forM condTreeComponents $ \ (cond, child, _mchild) -> do
     condVar  <- condL . unTC =<< traverse (getConfVar pkg) (TraversableCondition cond)
     childVar <- getCondTree pkg child
@@ -158,7 +175,7 @@ getDependency (Dependency name verRange)
           let somePackage :: [Version] -> HakeSolverT Z3 AST
               somePackage xs = do
                 let packages = PackageIdentifier name <$> xs
-                Z3.mkOr =<< traverse getPackage packages
+                mkOrElse getPackage packages
 
           -- select at least one package in version range. this will be limited to
           -- one distinct version by an implies assertion in the same scope
