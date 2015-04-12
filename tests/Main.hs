@@ -103,8 +103,14 @@ main = do
 
   let prog = do
         setASTPrintMode Z3_PRINT_SMTLIB2_COMPLIANT
+        ghcFlag <- getConfVar (PackageName "##global") (Impl GHC anyVersion)
+        assert ghcFlag
         x <- getDependency $ Dependency (PackageName "Coroutine") anyVersion
         assert x
+        b <- getDistinctVersion $ Dependency (PackageName "base") anyVersion
+        assert b
+        bs <- astToString x
+        liftIO $ putStrLn bs
         (res, mmodel) <- getModel
         case mmodel of
           Just model -> do
@@ -114,4 +120,8 @@ main = do
 
   (x, st') <- runLocalHakeSolverT st env prog
 
-  print x
+  case x of
+    (Sat, Just str) -> do
+      putStrLn "found model"
+      putStr str
+    _ -> print x
