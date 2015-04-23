@@ -118,7 +118,10 @@ execLocalHakeSolverT st env app = do
   let script = execStateT (unHakeSolverT app) st
   Z3.evalZ3WithEnv (Z3.local script) env
 
-getConfVar :: PackageName -> ConfVar -> HakeSolverT Z3 AST
+getConfVar
+  :: PackageName
+  -> ConfVar
+  -> HakeSolverT Z3 AST
 getConfVar pkg k = do
   let k' = OrderedConfVar k
       prefix | Flag _ <- k = renderOneLine pkg ++ "/"
@@ -131,8 +134,12 @@ getConfVar pkg k = do
       put st{hakeSolverVars = Map.insert k' v hakeSolverVars}
       return v
 
-getCondTree :: Show a => PackageName -> CondTree ConfVar [Dependency] a -> HakeSolverT Z3 (Maybe AST)
-getCondTree pkg CondNode{condTreeConstraints, condTreeComponents} = do
+getCondTree
+  :: Show a
+  => PackageName
+  -> CondTree ConfVar [Dependency] a
+  -> HakeSolverT Z3 (Maybe AST)
+getCondTree pkg CondNode{condTreeConstraints, condTreeComponents} =
   case (condTreeConstraints, condTreeComponents) of
     ([], _ ) -> return Nothing -- no constraints, we're good to go
     (xs, []) -> fmap Just . Z3.mkAnd =<< traverse getDependency xs
@@ -147,7 +154,9 @@ getCondTree pkg CondNode{condTreeConstraints, condTreeComponents} = do
             Nothing -> return condVar
       Z3.mkAnd [xs', ys']
 
-getDependency :: Dependency -> HakeSolverT Z3 AST
+getDependency
+  :: Dependency
+  -> HakeSolverT Z3 AST
 getDependency (Dependency name verRange)
   | name `elem` builtinPackages = Z3.mkTrue
   | otherwise = do
@@ -174,7 +183,9 @@ getDependency (Dependency name verRange)
           liftIO . putStrLn $ "missing package: " ++ show name
           Z3.mkFalse
 
-getPackage :: PackageIdentifier -> HakeSolverT Z3 AST
+getPackage
+  :: PackageIdentifier
+  -> HakeSolverT Z3 AST
 getPackage pkgId
   -- packages installed with GHC don't have .cabal files in hackage
   -- eventually these should have their cabal files added in so this
