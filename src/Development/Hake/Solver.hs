@@ -204,9 +204,7 @@ getPackage pkgId
               -- bidirectional dependencies (parent <=> child) so it may be better to insert a Z3.false constant instead.
               State.modify $ \ s@HakeSolverState{hakeSolverPkgs = pkgs} -> s{hakeSolverPkgs = Map.insert pkgId self pkgs}
               mdeps <- getCondTree (pkgName pkgId) condNode
-              self' <- case mdeps of
-                Just deps -> Z3.mkImplies self deps
-                Nothing -> return self
+              self' <- maybe (pure self) (Z3.mkImplies self) mdeps
               -- other packages should infer our dependencies, make them known
               State.modify $ \ s@HakeSolverState{hakeSolverPkgs = pkgs} -> s{hakeSolverPkgs = Map.insert pkgId self' pkgs}
               return $! self'
