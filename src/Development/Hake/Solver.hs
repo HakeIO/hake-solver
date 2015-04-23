@@ -145,7 +145,7 @@ getCondTree pkg CondNode{condTreeConstraints, condTreeComponents} =
     (xs, []) -> fmap Just . Z3.mkAnd =<< traverse getDependency xs
     (xs, ys) -> Just <$> do
       xs' <- Z3.mkAnd =<< traverse getDependency xs
-      ys' <- Z3.mkAnd =<<
+      ys' <- Z3.mkAnd =<< do
         for ys $ \ (cond, child, _mchild) -> do
           condVar  <- condL . unTC =<< traverse (getConfVar pkg) (TraversableCondition cond)
           mchildVar <- getCondTree pkg child
