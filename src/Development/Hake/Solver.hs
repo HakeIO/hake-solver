@@ -1,5 +1,4 @@
 {-# LANGUAGE DeriveFunctor #-}
-{-# LANGUAGE DeriveTraversable #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE NamedFieldPuns #-}
 
@@ -43,7 +42,7 @@ condL (COr x y)   = Z3.mkOr =<< traverse condL [x, y]
 condL (CAnd x y)  = Z3.mkAnd =<< traverse condL [x, y]
 
 builtinPackages :: [PackageName]
-builtinPackages = map PackageName $
+builtinPackages = map PackageName
   [ "rts"
   , "ffi"
   , "ghc"
@@ -139,7 +138,7 @@ getCondTree pkg CondNode{condTreeConstraints, condTreeComponents} = do
     (xs, []) -> fmap Just . Z3.mkAnd =<< traverse getDependency xs
     (xs, ys) -> Just <$> do
       xs' <- Z3.mkAnd =<< traverse getDependency xs
-      ys' <- Z3.mkAnd =<< do
+      ys' <- Z3.mkAnd =<<
         for ys $ \ (cond, child, _mchild) -> do
           condVar  <- condL . unTC =<< traverse (getConfVar pkg) (TraversableCondition cond)
           mchildVar <- getCondTree pkg child
@@ -186,7 +185,7 @@ getPackage pkgId
       mgdesc <- packageVersionMapLookup pkgId <$> gets hakeSolverGenDesc
       case (mcachedVar, mgdesc) of
         (Just cachedVar, _) -> return cachedVar
-        (Nothing, Nothing) -> trace "wtf2" $ Z3.mkFalse
+        (Nothing, Nothing) -> trace "wtf2" Z3.mkFalse
         (_, Just gdesc)
           | Just condNode <- condLibrary gdesc -> do
               self <- Z3.mkFreshBoolVar $ renderOneLine pkgId
@@ -212,12 +211,13 @@ getDistinctVersion (Dependency pkgName _) = do
     -- to validate that one of two cases will occur:
     -- 1) only a single version of the package is selected, regardless of constraints
     -- 2) no version of the package is selected
-    Just k  -> do
+    Just k  ->
+      Z3.mkOr $ Map.elems k
       -- t <- Z3.mkTrue
-      e <- Z3.mkOr $ Map.elems k
+      -- e <- Z3.mkOr $ Map.elems k
       -- Z3.mkOr [e, t]
-      return e
-    Nothing -> trace ("assertDistinctVersion couldn't find: " ++ show pkgName) $ Z3.mkFalse
+      -- return e
+    Nothing -> trace ("assertDistinctVersion couldn't find: " ++ show pkgName) Z3.mkFalse
 
 getLatestVersion :: PackageName -> HakeSolverT Z3 (Z3.Result, Maybe PackageIdentifier)
 getLatestVersion pkgName = do
@@ -246,28 +246,3 @@ getLatestVersion pkgName = do
               _      -> step ys
 
       in step . List.reverse $ Map.keys ve
-
--- getLatestVersion :: Map x -> HakeSolverT Z3 (Z3.Result PackageIdentifier)
-getLatestVersion' :: PackageName -> Map Version a -> HakeSolverT Z3 (Z3.Result, Maybe PackageIdentifier)
-getLatestVersion' pkgName =
-      let step [] = return (Z3.Unsat, Nothing)
-          step (pkgVer:ys) = do
-            let pkgId = PackageIdentifier pkgName pkgVer
-            pkgVar <- getPackage pkgId
-            res <- Z3.local $ do
-              Z3.assert pkgVar
-{-
-              liftIO . putStrLn =<< showContext
-              x <- showModel
-              case x of
-                Sat x' -> liftIO $ putStrLn x'
-                Unsat  -> liftIO $ putStrLn "Unsat"
-                Undef  -> liftIO $ putStrLn "Undef"
--}
-              Z3.check
-
-            case res of
-              Z3.Sat -> return (Z3.Sat, Just pkgId)
-              _      -> step ys
-
-      in step . List.reverse . Map.keys
