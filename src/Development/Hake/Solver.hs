@@ -171,14 +171,9 @@ getDependency (Dependency name verRange)
                 let packages = PackageIdentifier name <$> xs
                 Z3.mkOr =<< traverse getPackage packages
 
-          case List.partition (`withinRange` verRange) (Map.keys vers) of
-            ([], _ ) -> Z3.mkFalse -- no versions within range
-            (xs, []) -> somePackage xs
-            (xs, ys) -> do
-              xs' <- somePackage xs
-              -- avoid all packages out of range
-              ys' <- Z3.mkNot =<< somePackage ys
-              Z3.mkAnd [xs', ys']
+          case List.filter (`withinRange` verRange) (Map.keys vers) of
+            [] -> Z3.mkFalse -- no versions within range
+            xs -> somePackage xs
 
         Nothing -> do
           liftIO . putStrLn $ "missing package: " ++ show name
