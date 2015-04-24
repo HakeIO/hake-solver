@@ -166,6 +166,7 @@ getDependency (Dependency name verRange)
           -- select at least one package in version range. this will be limited to
           -- one distinct version by an implies assertion in the same scope
           let somePackage :: [Version] -> HakeSolverT Z3 AST
+              somePackage [x] = getPackage $ PackageIdentifier name x
               somePackage xs = do
                 let packages = PackageIdentifier name <$> xs
                 Z3.mkOr =<< traverse getPackage packages
