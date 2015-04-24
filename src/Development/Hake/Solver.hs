@@ -6,6 +6,7 @@ module Development.Hake.Solver where
 
 import Control.Monad.Trans
 import Control.Monad.State.Strict as State
+import Data.Foldable (foldrM)
 import qualified Data.List as List
 import Data.Map.Lazy (Map)
 import qualified Data.Map.Lazy as Map
@@ -212,16 +213,12 @@ getDistinctVersion :: Dependency -> HakeSolverT Z3 AST
 getDistinctVersion (Dependency pkgName _) = do
   pkgs <- splitPackageIdentifiers <$> gets hakeSolverPkgs
   case Map.lookup pkgName pkgs of
-    -- the (or (distinct x y) true) assertion is useful for global assertions
-    -- to validate that one of two cases will occur:
-    -- 1) only a single version of the package is selected, regardless of constraints
-    -- 2) no version of the package is selected
-    Just k  ->
-      Z3.mkOr $ Map.elems k
-      -- t <- Z3.mkTrue
-      -- e <- Z3.mkOr $ Map.elems k
-      -- Z3.mkOr [e, t]
-      -- return e
+    Just k ->
+     case Map.elems k of
+       [] -> fail "cannot make an empty set distinct?"
+       x:xs ->
+         let distinct l r = Z3.mkDistinct [l, r]
+         in foldrM distinct x xs
     Nothing -> trace ("assertDistinctVersion couldn't find: " ++ show pkgName) Z3.mkFalse
 
 getLatestVersion :: PackageName -> HakeSolverT Z3 (Z3.Result, Maybe PackageIdentifier)
