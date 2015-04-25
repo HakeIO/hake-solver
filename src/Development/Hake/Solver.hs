@@ -81,8 +81,8 @@ packageVersionMapInsert k = Map.insertWith mappend (pkgName k) . Map.singleton (
 
 data HakeSolverState = HakeSolverState
   { hakeSolverGenDesc :: !(PackageVersionMap GenericPackageDescription)
-  , hakeSolverVars    :: !(Map OrderedConfVar Z3.AST)
-  , hakeSolverPkgs    :: !(Map PackageIdentifier Z3.AST)
+  , hakeSolverVars    :: !(Map OrderedConfVar AST)
+  , hakeSolverPkgs    :: !(Map PackageIdentifier AST)
   }
 
 defaultSolverState :: HakeSolverState
