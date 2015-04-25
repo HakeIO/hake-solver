@@ -58,16 +58,25 @@ builtinPackages = map PackageName
 
 type PackageVersionMap a = Map PackageName (Map Version a)
 
-splitPackageIdentifiers :: Map PackageIdentifier a -> PackageVersionMap a
+splitPackageIdentifiers
+  :: Map PackageIdentifier a
+  -> PackageVersionMap a
 splitPackageIdentifiers = Map.fromListWith Map.union . fmap step . Map.toList where
   step (k, v) = (pkgName k, Map.singleton (pkgVersion k) v)
 
-packageVersionMapLookup :: PackageIdentifier -> PackageVersionMap a -> Maybe a
+packageVersionMapLookup
+  :: PackageIdentifier
+  -> PackageVersionMap a
+  -> Maybe a
 packageVersionMapLookup package packages = do
   versions <- Map.lookup (pkgName package) packages
   Map.lookup (pkgVersion package) versions
 
-packageVersionMapInsert :: PackageIdentifier -> a -> PackageVersionMap a -> PackageVersionMap a
+packageVersionMapInsert
+  :: PackageIdentifier
+  -> a
+  -> PackageVersionMap a
+  -> PackageVersionMap a
 packageVersionMapInsert k = Map.insertWith mappend (pkgName k) . Map.singleton (pkgVersion k)
 
 data HakeSolverState = HakeSolverState
@@ -75,6 +84,14 @@ data HakeSolverState = HakeSolverState
   , hakeSolverVars    :: !(Map OrderedConfVar Z3.AST)
   , hakeSolverPkgs    :: !(Map PackageIdentifier Z3.AST)
   }
+
+defaultSolverState :: HakeSolverState
+defaultSolverState =
+  HakeSolverState
+    { hakeSolverGenDesc = Map.empty
+    , hakeSolverVars = Map.empty
+    , hakeSolverPkgs = Map.empty
+    }
 
 newtype HakeSolverT m a = HakeSolverT {unHakeSolverT :: StateT HakeSolverState m a}
   deriving (Applicative, Functor, Monad, MonadIO, MonadTrans, MonadState HakeSolverState)
@@ -148,7 +165,7 @@ getCondTree pkg CondNode{condTreeConstraints, condTreeComponents} =
       xs' <- Z3.mkAnd =<< traverse getDependency xs
       ys' <- Z3.mkAnd =<< do
         for ys $ \ (cond, child, _mchild) -> do
-          condVar  <- condL . unTC =<< traverse (getConfVar pkg) (TraversableCondition cond)
+          condVar <- condL . unTC =<< traverse (getConfVar pkg) (TraversableCondition cond)
           mchildVar <- getCondTree pkg child
           case mchildVar of
             Just childVar -> Z3.mkAnd [condVar, childVar]
