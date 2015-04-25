@@ -75,7 +75,7 @@ loadGlobalDatabase
   :: HakeSolverT Z3 ()
 loadGlobalDatabase = do
   entries <- liftIO $ Tar.read <$> (Bl.readFile =<< packageTarball)
-  let entries' = takeEntries 1000 entries
+  let entries' = takeEntries 10000 entries
   gpdMap <- liftIO $ foldEntriesM loadPackageDescriptions Map.empty entries'
   let gpdHakeMap = splitPackageIdentifiers gpdMap
   state (\ x -> ((), x{hakeSolverGenDesc = gpdHakeMap}))
@@ -93,19 +93,25 @@ query = do
 
 main :: IO ()
 main = do
-  env <- Z3.newEnv (Just QF_BV) stdOpts
+  env <- Z3.newEnv Nothing stdOpts
   st <- execHakeSolverT defaultSolverState env loadGlobalDatabase
 
   let prog = do
         setASTPrintMode Z3_PRINT_SMTLIB2_COMPLIANT
         ghcFlag <- getConfVar (PackageName "##global") (Impl GHC anyVersion)
         assert ghcFlag
+
         x <- getDependency $ Dependency (PackageName "Coroutine") anyVersion
-        assert x
-        b <- getDistinctVersion $ Dependency (PackageName "base") anyVersion
-        assert b
         bs <- astToString x
         liftIO $ putStrLn bs
+
+        _b <- getDependency $ Dependency (PackageName "base") anyVersion
+        b <- getDistinctVersion $ Dependency (PackageName "base") anyVersion
+        bs <- astToString b
+        liftIO $ putStrLn bs
+
+        assert b
+        assert x
         (res, mmodel) <- getModel
         case mmodel of
           Just model -> do

@@ -6,7 +6,7 @@ module Development.Hake.Solver where
 
 import Control.Monad.Trans
 import Control.Monad.State.Strict as State
-import Data.Foldable (foldrM)
+import Data.Foldable (traverse_)
 import qualified Data.List as List
 import Data.Map.Lazy (Map)
 import qualified Data.Map.Lazy as Map
@@ -218,10 +218,8 @@ getPackage pkgId
               -- bidirectional dependencies (parent <=> child) so it may be better to insert a Z3.false constant instead.
               State.modify $ \ s@HakeSolverState{hakeSolverPkgs = pkgs} -> s{hakeSolverPkgs = Map.insert pkgId self pkgs}
               mdeps <- getCondTree (pkgName pkgId) condNode
-              self' <- maybe (pure self) (Z3.mkImplies self) mdeps
-              -- other packages should infer our dependencies, make them known
-              State.modify $ \ s@HakeSolverState{hakeSolverPkgs = pkgs} -> s{hakeSolverPkgs = Map.insert pkgId self' pkgs}
-              return $! self'
+              traverse_ (Z3.assert <=< Z3.mkImplies self) mdeps
+              return self
 
           -- pretend we can always build executables (like cpphs) for now
           | otherwise -> Z3.mkTrue
@@ -233,9 +231,13 @@ getDistinctVersion (Dependency pkgName _) = do
     Just k ->
      case Map.elems k of
        [] -> fail "cannot make an empty set distinct?"
-       x:xs ->
-         let distinct l r = Z3.mkDistinct [l, r]
-         in foldrM distinct x xs
+       [x] -> return x
+       xs -> do
+         zero <- Z3.mkInteger 0
+         one <- Z3.mkInteger 1
+         let distinct l = Z3.mkIte l one zero
+         assigned <- Z3.mkAdd =<< traverse distinct xs
+         Z3.mkEq assigned one
     Nothing -> trace ("assertDistinctVersion couldn't find: " ++ show pkgName) Z3.mkFalse
 
 getLatestVersion :: PackageName -> HakeSolverT Z3 (Z3.Result, Maybe PackageIdentifier)
