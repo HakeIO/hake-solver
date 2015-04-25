@@ -6,6 +6,7 @@ import Codec.Archive.Tar as Tar
 import Control.Exception (Exception, throwIO)
 import Control.Monad.IO.Class
 import Control.Monad.State.Lazy (state)
+import Data.Foldable
 import Data.Map.Lazy as Map
 import System.Exit (ExitCode(ExitSuccess))
 import System.FilePath
@@ -106,6 +107,7 @@ main = do
         liftIO $ putStrLn bs
 
         _b <- getDependency $ Dependency (PackageName "base") anyVersion
+        bns <- getDependencyNodes $ Dependency (PackageName "base") anyVersion
         b <- getDistinctVersion $ Dependency (PackageName "base") anyVersion
         bs <- astToString b
         liftIO $ putStrLn bs
@@ -115,8 +117,14 @@ main = do
         (res, mmodel) <- getModel
         case mmodel of
           Just model -> do
-            str <- modelToString model
-            return (res, Just str)
+            -- str <- modelToString model
+            for_ bns $ \ (pn, bn) -> do
+              mmev <- evalBool model bn
+              liftIO $ case mmev of
+                Just True -> putStrLn $ "Ploz install: " ++ show pn
+                Just False -> putStrLn $ "Skip: " ++ show pn
+                Nothing -> putStrLn $ "Undef: " ++ show pn
+            return (res, Just "")
           Nothing -> return (res, Nothing)
 
   (x, _st') <- runLocalHakeSolverT st env prog

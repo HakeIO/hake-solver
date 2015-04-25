@@ -1,6 +1,7 @@
 {-# LANGUAGE DeriveFunctor #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE NamedFieldPuns #-}
+{-# LANGUAGE TupleSections #-}
 
 module Development.Hake.Solver where
 
@@ -196,6 +197,26 @@ getDependency (Dependency name verRange)
         Nothing -> do
           liftIO . putStrLn $ "missing package: " ++ show name
           Z3.mkFalse
+
+getDependencyNodes
+  :: Dependency
+  -> HakeSolverT Z3 [(PackageIdentifier, AST)]
+getDependencyNodes (Dependency name verRange)
+  | name `elem` builtinPackages = return []
+  | otherwise = do
+      pkgs <- gets hakeSolverGenDesc
+      case Map.lookup name pkgs of
+        Just vers -> do
+          let somePackage :: [Version] -> HakeSolverT Z3 [(PackageIdentifier, AST)]
+              somePackage xs = do
+                let packages = PackageIdentifier name <$> xs
+                traverse (\ x -> (x,) <$> getPackage x) packages
+
+          somePackage $ List.filter (`withinRange` verRange) (Map.keys vers)
+
+        Nothing -> do
+          liftIO . putStrLn $ "missing package: " ++ show name
+          return []
 
 getPackage
   :: PackageIdentifier
