@@ -2,21 +2,19 @@
 
 module Main where
 
-import Codec.Archive.Tar as Tar
-import Control.Exception (Exception, throwIO)
 import Control.Monad.IO.Class
 import Control.Monad.State.Lazy (state)
+import Control.Monad.Trans.Resource
 import Data.Foldable
 import Data.Map.Lazy as Map
-import System.Exit (ExitCode(ExitSuccess))
-import System.FilePath
 import System.IO
-import System.Process (readCreateProcessWithExitCode, shell)
 import Z3.Monad as Z3
 
+import qualified Database.LevelDB as LevelDB
+
+import qualified Data.Text as T
+import qualified Data.Text.Encoding as T
 import qualified Data.Text.Encoding.Error as T
-import qualified Data.Text.Lazy as Tl
-import qualified Data.Text.Lazy.Encoding as Tl
 
 import Distribution.Compiler
 import Distribution.Package
@@ -26,59 +24,29 @@ import Distribution.Version
 
 import Development.Hake.Solver
 
-import qualified Data.ByteString.Lazy as Bl
-
-packageTarball :: IO String
-packageTarball = do
-  let cmd = shell "grep remote-repo-cache ~/.cabal/config | awk '{print $2}'"
-  (ExitSuccess, dirs, _) <- readCreateProcessWithExitCode cmd ""
-  case lines dirs of
-    [dir] -> return $ combine dir "hackage.haskell.org/00-index.tar"
-    _ -> fail "uhm"
-
-foldEntriesM
-  :: (Exception e, MonadIO m)
-  => (a -> Entry -> m a)
-  -> a
-  -> Entries e
-  -> m a
-foldEntriesM f = step where
-  step !s (Next e es) = f s e >>= flip step es
-  step s Tar.Done = return s
-  step _ (Fail e) = liftIO $ throwIO e
-
-takeEntries
-  :: Int
-  -> Entries e
-  -> Entries e
-takeEntries 0 _ = Tar.Done
-takeEntries i (Next e es) = Next e (takeEntries (i-1) es)
-takeEntries _ x = x
-
-loadPackageDescriptions
-  :: Map PackageIdentifier GenericPackageDescription
-  -> Entry
-  -> IO (Map PackageIdentifier GenericPackageDescription)
-loadPackageDescriptions !agg e
-  | ".cabal" <- takeExtension (entryPath e)
-  , NormalFile lbs _fs <- entryContent e
-  , ParseOk _ gpd <- parsePackageDescription (Tl.unpack (Tl.decodeUtf8With T.ignore lbs)) = do
-      putChar '.'
-      hFlush stdout
-      return $ Map.insert (packageId gpd) gpd agg
-
-  | otherwise = do
-      putChar 'x'
-      hFlush stdout
-      return agg
-
 loadGlobalDatabase
   :: HakeSolverT Z3 ()
 loadGlobalDatabase = do
-  entries <- liftIO $ Tar.read <$> (Bl.readFile =<< packageTarball)
-  let entries' = takeEntries 10000 entries
-  gpdMap <- liftIO $ foldEntriesM loadPackageDescriptions Map.empty entries'
-  let gpdHakeMap = splitPackageIdentifiers gpdMap
+  gpdHakeMap <- liftIO . runResourceT $ do
+    db <- LevelDB.open "/tmp/hackagedb" LevelDB.defaultOptions{LevelDB.createIfMissing = False}
+    LevelDB.withIterator db LevelDB.defaultReadOptions $ \ iter ->
+      let go :: Map PackageIdentifier GenericPackageDescription -> ResourceT IO (PackageVersionMap GenericPackageDescription)
+          go agg = do
+            isValid <- LevelDB.iterValid iter
+            if not isValid
+              then return $ splitPackageIdentifiers agg
+              else do
+                Just bs <- LevelDB.iterValue iter
+                case parsePackageDescription . T.unpack $ T.decodeUtf8With T.ignore bs of
+                  ParseOk _ gpd -> do
+                    LevelDB.iterNext iter
+                    liftIO $ putStr "."
+                    liftIO $ hFlush stdout
+                    go $ Map.insert (packageId gpd) gpd agg
+                  _ -> fail "asdfasdf"
+
+      in LevelDB.iterFirst iter >> go Map.empty
+
   state (\ x -> ((), x{hakeSolverGenDesc = gpdHakeMap}))
 
 query :: Z3 (Result, Maybe String)

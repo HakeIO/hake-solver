@@ -73,11 +73,10 @@ test-suite solver-test
     bytestring,
     Cabal,
     containers,
-    filepath,
     hake-solver,
+    leveldb-haskell,
     mtl,
-    process,
-    tar,
+    resourcet,
     text,
     transformers,
     z3,
@@ -86,6 +85,8 @@ test-suite solver-test
     tasty-quickcheck,
     HUnit                      >= 1.2,
     QuickCheck                 >= 2.4
+  ghc-options:
+    -Wall -rtsopts
 
 source-repository head
   type:     git
