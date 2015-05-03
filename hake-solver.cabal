@@ -58,6 +58,8 @@ executable solver-import
     transformers
   ghc-options:
     -Wall
+  extra-libraries:
+    stdc++
 
 test-suite solver-test
   default-language:
@@ -87,6 +89,8 @@ test-suite solver-test
     QuickCheck                 >= 2.4
   ghc-options:
     -Wall -rtsopts
+  extra-libraries:
+    stdc++
 
 source-repository head
   type:     git
