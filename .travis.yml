@@ -2,14 +2,10 @@ env:
  - GHCVER=7.10.1
 
 before_install:
- - travis_retry sudo add-apt-repository -y ppa:hvr/ghc
+ - travis_retry sudo add-apt-repository -y ppa:hvr/ghc ppa:delcypher/smt
  - travis_retry sudo apt-get update
- - travis_retry sudo apt-get install cabal-install-1.22 ghc-$GHCVER alex-3.1.4 happy-1.19.3
+ - travis_retry sudo apt-get install cabal-install-1.22 ghc-$GHCVER alex-3.1.4 happy-1.19.3 z3-4.3.2
  - export PATH=/opt/ghc/$GHCVER/bin:/opt/cabal/1.22/bin:/opt/alex/3.1.4/bin:/opt/happy/1.19.3/bin:$PATH
- - travis_retry curl -o /tmp/z3.zip 'http://download-codeplex.sec.s-msft.com/Download/Release?ProjectName=z3&DownloadId=1441362&FileTime=130718577284870000&Build=20988'
- - unzip /tmp/z3.zip -d /tmp/z3
- - find /tmp/z3 -mindepth 2 -maxdepth 2 -type d -name include -print0 | sudo xargs -0 -I{} sh -c 'cp {}/*.h /usr/include/'
- - find /tmp/z3 -mindepth 3 -maxdepth 3 -type f -name 'lib*' -print0 | sudo xargs -0 -I{} cp {} /usr/lib/
 
 install:
  - cabal update
