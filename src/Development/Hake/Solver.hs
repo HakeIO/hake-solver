@@ -11,6 +11,7 @@ import Data.Foldable (traverse_)
 import qualified Data.List as List
 import Data.Map.Lazy (Map)
 import qualified Data.Map.Lazy as Map
+import Data.Monoid
 import Data.Traversable
 import Distribution.Package (Dependency(..), PackageIdentifier(..), PackageName(..))
 import Distribution.PackageDescription (CondTree(..), Condition(..), ConfVar(..), FlagName(..), GenericPackageDescription(condLibrary))
@@ -161,17 +162,23 @@ getCondTree
 getCondTree pkg CondNode{condTreeConstraints, condTreeComponents} =
   case (condTreeConstraints, condTreeComponents) of
     ([], _ ) -> return Nothing -- no constraints, we're good to go
-    (xs, []) -> fmap Just . Z3.mkAnd =<< traverse getDependency xs
     (xs, ys) -> Just <$> do
-      xs' <- Z3.mkAnd =<< traverse getDependency xs
-      ys' <- Z3.mkAnd =<< do
-        for ys $ \ (cond, child, _mchild) -> do
-          condVar <- condL . unTC =<< traverse (getConfVar pkg) (TraversableCondition cond)
-          mchildVar <- getCondTree pkg child
-          case mchildVar of
-            Just childVar -> Z3.mkAnd [condVar, childVar]
-            Nothing -> return condVar
-      Z3.mkAnd [xs', ys']
+      xs' <- traverse getDependency xs
+      ys' <- for ys $ \ (cond, child, _mchild) -> do
+        condVar <- condL . unTC =<< traverse (getConfVar pkg) (TraversableCondition cond)
+        mchildVar <- getCondTree pkg child
+        case mchildVar of
+          Just childVar -> Z3.mkAnd [condVar, childVar]
+          Nothing -> return condVar
+      combineWith Z3.mkAnd $ xs' <> ys'
+
+combineWith
+  :: Applicative f
+  => ([a] -> f a)
+  -> [a]
+  -> f a
+combineWith _ [x] = pure x
+combineWith f xs = f xs
 
 getDependency
   :: Dependency
@@ -183,12 +190,11 @@ getDependency (Dependency name verRange)
       case Map.lookup name pkgs of
         Just vers -> do
           -- select at least one package in version range. this will be limited to
-          -- one distinct version by an implies assertion in the same scope
+          -- one distinct version by other assertion in the same scope
           let somePackage :: [Version] -> HakeSolverT Z3 AST
-              somePackage [x] = getPackage $ PackageIdentifier name x
               somePackage xs = do
                 let packages = PackageIdentifier name <$> xs
-                Z3.mkOr =<< traverse getPackage packages
+                combineWith Z3.mkOr =<< traverse getPackage packages
 
           case List.filter (`withinRange` verRange) (Map.keys vers) of
             [] -> Z3.mkFalse -- no versions within range
@@ -245,7 +251,9 @@ getPackage pkgId
           -- pretend we can always build executables (like cpphs) for now
           | otherwise -> Z3.mkTrue
 
-getDistinctVersion :: Dependency -> HakeSolverT Z3 AST
+getDistinctVersion
+  :: Dependency
+  -> HakeSolverT Z3 AST
 getDistinctVersion (Dependency pkgName _) = do
   pkgs <- splitPackageIdentifiers <$> gets hakeSolverPkgs
   case Map.lookup pkgName pkgs of
@@ -261,7 +269,9 @@ getDistinctVersion (Dependency pkgName _) = do
          Z3.mkEq assigned one
     Nothing -> trace ("assertDistinctVersion couldn't find: " ++ show pkgName) Z3.mkFalse
 
-getLatestVersion :: PackageName -> HakeSolverT Z3 (Z3.Result, Maybe PackageIdentifier)
+getLatestVersion
+  :: PackageName
+  -> HakeSolverT Z3 (Z3.Result, Maybe PackageIdentifier)
 getLatestVersion pkgName = do
   pkgs <- gets hakeSolverGenDesc
   case Map.lookup pkgName pkgs of
