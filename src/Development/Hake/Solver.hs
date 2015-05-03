@@ -142,9 +142,10 @@ getConfVar
   -> ConfVar
   -> HakeSolverT Z3 AST
 getConfVar pkg k = do
-  let k' = OrderedConfVar k
-      prefix | Flag _ <- k = renderOneLine pkg ++ "/"
-             | otherwise   = "##global/"
+  let k' = OrderedConfVar prefix k
+      (prefix, k')
+        | Flag _ <- k = (renderOneLine pkg ++ "/", OrderedConfVar (Just pkg) k)
+        | otherwise   = ("##global/", OrderedConfVar Nothing k)
   st@HakeSolverState{hakeSolverVars} <- get
   case Map.lookup k' hakeSolverVars of
     Just v -> return v
