@@ -59,7 +59,7 @@ executable solver-import
   ghc-options:
     -Wall
   extra-libraries:
-    stdc++
+    stdc++ leveldb
 
 test-suite solver-test
   default-language:
@@ -90,7 +90,7 @@ test-suite solver-test
   ghc-options:
     -Wall -rtsopts
   extra-libraries:
-    stdc++
+    stdc++ leveldb
 
 source-repository head
   type:     git
