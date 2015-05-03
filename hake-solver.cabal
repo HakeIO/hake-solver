@@ -57,7 +57,7 @@ executable solver-import
     text,
     transformers
   ghc-options:
-    -Wall
+    -Wall -rtsopts -static
   extra-libraries:
     leveldb, stdc++
 
@@ -88,7 +88,7 @@ test-suite solver-test
     HUnit                      >= 1.2,
     QuickCheck                 >= 2.4
   ghc-options:
-    -Wall -rtsopts
+    -Wall -rtsopts -static
   extra-libraries:
     leveldb, stdc++
 
