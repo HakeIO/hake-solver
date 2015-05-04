@@ -12,9 +12,12 @@ import qualified Data.List as List
 import Data.Map.Lazy (Map)
 import qualified Data.Map.Lazy as Map
 import Data.Monoid
+import Data.Set (Set)
 import Data.Traversable
+import Distribution.Compiler (CompilerId(..))
 import Distribution.Package (Dependency(..), PackageIdentifier(..), PackageName(..))
-import Distribution.PackageDescription (CondTree(..), Condition(..), ConfVar(..), FlagName(..), GenericPackageDescription(condLibrary))
+import Distribution.PackageDescription
+import Distribution.System
 import Distribution.Text (Text, disp)
 import Distribution.Version
 import Text.PrettyPrint hiding ((<>), ($$))
@@ -85,14 +88,16 @@ data HakeSolverState = HakeSolverState
   { hakeSolverGenDesc :: !(PackageVersionMap GenericPackageDescription)
   , hakeSolverVars    :: !(Map OrderedConfVar AST)
   , hakeSolverPkgs    :: !(Map PackageIdentifier AST)
+  , hakeSolverFlags   :: !(Map PackageName FlagAssignment)
   }
 
 defaultSolverState :: HakeSolverState
 defaultSolverState =
   HakeSolverState
     { hakeSolverGenDesc = Map.empty
-    , hakeSolverVars = Map.empty
-    , hakeSolverPkgs = Map.empty
+    , hakeSolverVars    = Map.empty
+    , hakeSolverPkgs    = Map.empty
+    , hakeSolverFlags   = Map.empty
     }
 
 newtype HakeSolverT m a = HakeSolverT {unHakeSolverT :: StateT HakeSolverState m a}
@@ -155,8 +160,7 @@ getConfVar pkg k = do
       return v
 
 getCondTree
-  :: Show a
-  => PackageName
+  :: PackageName
   -> CondTree ConfVar [Dependency] a
   -> HakeSolverT Z3 (Maybe AST)
 getCondTree pkg CondNode{condTreeConstraints, condTreeComponents} =
@@ -180,6 +184,10 @@ combineWith
 combineWith _ [x] = pure x
 combineWith f xs = f xs
 
+-- |
+-- Generate an `or` constraint that covers all versions of a package that
+-- meet the given range constraint. This does not require the solution
+-- to be distinct, that will be addressed elsewere.
 getDependency
   :: Dependency
   -> HakeSolverT Z3 AST
@@ -228,10 +236,12 @@ getPackage
   :: PackageIdentifier
   -> HakeSolverT Z3 AST
 getPackage pkgId
-  -- packages installed with GHC don't have .cabal files in hackage
-  -- eventually these should have their cabal files added in so this
-  -- special case could be removed
-  | pkgName pkgId `elem` builtinPackages = Z3.mkTrue
+  | pkgName pkgId `elem` builtinPackages =
+      -- packages installed with GHC don't have .cabal files in hackage
+      -- eventually these should have their cabal files added in so this
+      -- special case could be removed
+      Z3.mkTrue
+
   | otherwise = do
       mcachedVar <- Map.lookup pkgId <$> gets hakeSolverPkgs
       mgdesc <- packageVersionMapLookup pkgId <$> gets hakeSolverGenDesc
@@ -271,30 +281,90 @@ getDistinctVersion (Dependency pkgName _) = do
 
 getLatestVersion
   :: PackageName
-  -> HakeSolverT Z3 (Z3.Result, Maybe PackageIdentifier)
+  -> HakeSolverT Z3 (Maybe (PackageIdentifier, AST))
 getLatestVersion pkgName = do
   pkgs <- gets hakeSolverGenDesc
   case Map.lookup pkgName pkgs of
-    Nothing -> trace "whut" $ return (Z3.Unsat, Nothing)
+    Nothing -> trace "whut" $ return Nothing
     Just ve ->
-      let step [] = return (Z3.Unsat, Nothing)
+      let step [] = return Nothing
           step (pkgVer:ys) = do
             let pkgId = PackageIdentifier pkgName pkgVer
             pkgVar <- getPackage pkgId
             res <- Z3.local $ do
               Z3.assert pkgVar
-{-
-              liftIO . putStrLn =<< showContext
-              x <- showModel
-              case x of
-                Sat x' -> liftIO $ putStrLn x'
-                Unsat  -> liftIO $ putStrLn "Unsat"
-                Undef  -> liftIO $ putStrLn "Undef"
--}
               Z3.check
 
             case res of
-              Z3.Sat -> return (Z3.Sat, Just pkgId)
+              Z3.Sat -> return $ Just (pkgId, pkgVar)
               _      -> step ys
 
-      in step . List.reverse $ Map.keys ve
+      -- keys are normally are returned in ascending order
+      -- but we want them in descending...
+      in step $ Map.foldlWithKey (\ xs k _ -> k:xs) [] ve
+
+data ComponentType
+  = Library
+  | Executable
+  | TestSuite
+  | Benchmark
+
+data Component
+  = SpecificComponent ComponentType String
+  | EveryComponent ComponentType
+
+data InstallationPlan = InstallationPlan
+  { packageFlagAssignments :: Map PackageName FlagAssignment
+  , packageComponents      :: Map PackageName (Set Component)
+  }
+
+-- |
+assertGlobalFlags
+  :: Platform -- ^ Target Platform
+  -> CompilerId -- ^ Target Compiler
+  -> HakeSolverT Z3 ()
+assertGlobalFlags (Platform arch os) (CompilerId compilerFlavor compilerVersion) = do
+  let globalPackage = PackageName "##global"
+  osFlag <- getConfVar globalPackage $ OS os
+  Z3.assert osFlag
+
+  archFlag <- getConfVar globalPackage $ Arch arch
+  Z3.assert archFlag
+
+  compilerFlag <- getConfVar globalPackage . Impl compilerFlavor $ thisVersion compilerVersion
+  Z3.assert compilerFlag
+
+getInstallationPlan
+  :: Platform -- ^ Target Platform
+  -> CompilerId -- ^ Target Compiler
+  -> Set PackageIdentifier -- ^ Currently installed packages
+  -> Map PackageName FlagAssignment -- ^ Hard assignment for flags, covers both installed and uninstalled packages
+  -> Map Dependency (Set Component) -- ^ Packages to install
+  -> [PackageName] -- ^ Priority order
+  -> HakeSolverT Z3 InstallationPlan
+getInstallationPlan platform compiler installedPackages flagAssignments desiredPackages packagePriorities = do
+  assertGlobalFlags platform compiler
+
+  -- select a single version for each package, in priority order
+  -- note: this should run in better than O(n*m) time because
+  -- we're folding over the partially solved constraint set
+  forM_ packagePriorities $ \ packagePriority -> do
+    Just (_, pkgVar) <- getLatestVersion packagePriority
+    Z3.assert pkgVar
+
+  -- once the versions have been selected we need to choose a flag
+  -- assignment for any unbound flags, with a preference to True...
+  -- this logic is pretty arbitrary but it is documented in Cabal
+
+  -- TODO: for executables, tests, benchmarks there is no requirement that
+  -- the selected package versions be consistent between eachother, so we'll
+  -- fu-malik to find a relaxed set of constraints (additional library versions)
+  -- that allow each executable to be compiled
+
+  return $ undefined
+
+resolveGenericPackageDescription
+  :: InstallationPlan
+  -> GenericPackageDescription
+  -> PackageDescription
+resolveGenericPackageDescription = error "not implemented"
