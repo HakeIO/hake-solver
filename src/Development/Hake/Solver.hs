@@ -7,7 +7,7 @@ module Development.Hake.Solver where
 
 import Control.Monad.Trans
 import Control.Monad.State.Strict as State
-import Data.Foldable (traverse_)
+import Data.Foldable (for_, traverse_)
 import qualified Data.List as List
 import Data.Map.Lazy (Map)
 import qualified Data.Map.Lazy as Map
@@ -88,7 +88,6 @@ data HakeSolverState = HakeSolverState
   { hakeSolverGenDesc :: !(PackageVersionMap GenericPackageDescription)
   , hakeSolverVars    :: !(Map OrderedConfVar AST)
   , hakeSolverPkgs    :: !(Map PackageIdentifier AST)
-  , hakeSolverFlags   :: !(Map PackageName FlagAssignment)
   }
 
 defaultSolverState :: HakeSolverState
@@ -97,7 +96,6 @@ defaultSolverState =
     { hakeSolverGenDesc = Map.empty
     , hakeSolverVars    = Map.empty
     , hakeSolverPkgs    = Map.empty
-    , hakeSolverFlags   = Map.empty
     }
 
 newtype HakeSolverT m a = HakeSolverT {unHakeSolverT :: StateT HakeSolverState m a}
@@ -335,6 +333,18 @@ assertGlobalFlags (Platform arch os) (CompilerId compilerFlavor compilerVersion)
   compilerFlag <- getConfVar globalPackage . Impl compilerFlavor $ thisVersion compilerVersion
   Z3.assert compilerFlag
 
+-- |
+assertAssignedFlags
+  :: Map PackageName FlagAssignment
+  -> HakeSolverT Z3 ()
+assertAssignedFlags flagAssignments =
+  for_ (Map.toList flagAssignments) $ \ (package, assignments) ->
+    for_ assignments $ \ (flag, assignment) -> do
+      var <- getConfVar package (Flag flag)
+      if assignment
+        then Z3.assert var
+        else Z3.assert =<< Z3.mkNot var
+
 getInstallationPlan
   :: Platform -- ^ Target Platform
   -> CompilerId -- ^ Target Compiler
@@ -344,12 +354,16 @@ getInstallationPlan
   -> [PackageName] -- ^ Priority order
   -> HakeSolverT Z3 InstallationPlan
 getInstallationPlan platform compiler installedPackages flagAssignments desiredPackages packagePriorities = do
+  -- pin down the platform and compiler
   assertGlobalFlags platform compiler
+
+  -- and any user specified flag assignments
+  assertAssignedFlags flagAssignments
 
   -- select a single version for each package, in priority order
   -- note: this should run in better than O(n*m) time because
   -- we're folding over the partially solved constraint set
-  forM_ packagePriorities $ \ packagePriority -> do
+  for_ packagePriorities $ \ packagePriority -> do
     Just (_, pkgVar) <- getLatestVersion packagePriority
     Z3.assert pkgVar
 
