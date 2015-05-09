@@ -159,22 +159,23 @@ getConfVar pkg k = do
       put st{hakeSolverVars = Map.insert k' v hakeSolverVars}
       return v
 
+-- |
+-- Convert a constrained Cabal configuration tree into a Z3 AST
 getCondTree
   :: PackageName
   -> CondTree ConfVar [Dependency] a
   -> HakeSolverT Z3 (Maybe AST)
-getCondTree pkg CondNode{condTreeConstraints, condTreeComponents} =
-  case (condTreeConstraints, condTreeComponents) of
-    ([], _ ) -> return Nothing -- no constraints, we're good to go
-    (xs, ys) -> Just <$> do
-      xs' <- traverse getDependency xs
-      ys' <- for ys $ \ (cond, child, _mchild) -> do
-        condVar <- condL . unTC =<< traverse (getConfVar pkg) (TraversableCondition cond)
-        mchildVar <- getCondTree pkg child
-        case mchildVar of
-          Just childVar -> Z3.mkAnd [condVar, childVar]
-          Nothing -> return condVar
-      combineWith Z3.mkAnd $ xs' <> ys'
+getCondTree pkg CondNode{condTreeConstraints, condTreeComponents} = do
+  constraints <- traverse getDependency condTreeConstraints
+  components <- for condTreeComponents $ \ (cond, child, _mchild) -> do
+    condVar <- condL . unTC =<< traverse (getConfVar pkg) (TraversableCondition cond)
+    mchildVar <- getCondTree pkg child
+    case mchildVar of
+      Just childVar -> Z3.mkAnd [condVar, childVar]
+      Nothing -> return condVar
+  case constraints <> components of
+    [] -> return Nothing
+    xs -> Just <$> combineWith Z3.mkAnd xs
 
 combineWith
   :: Applicative f
