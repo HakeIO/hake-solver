@@ -13,6 +13,7 @@ import Data.Map.Lazy (Map)
 import qualified Data.Map.Lazy as Map
 import Data.Monoid
 import Data.Set (Set)
+import qualified Data.Set as Set
 import Data.Traversable
 import Distribution.Compiler (CompilerId(..))
 import Distribution.Package (Dependency(..), PackageIdentifier(..), PackageName(..))
@@ -346,6 +347,24 @@ assertAssignedFlags flagAssignments =
       if assignment
         then Z3.assert var
         else Z3.assert =<< Z3.mkNot var
+
+-- |
+-- Return all nodes that do not have a user specified value
+getUnassignedFlags
+  :: Map PackageName FlagAssignment
+  -> HakeSolverT Z3 [AST]
+getUnassignedFlags flagAssignments = do
+  let assigned :: Set OrderedConfVar
+      assigned = Set.fromList $ do
+        (package, assignments) <- Map.toList flagAssignments
+        (flag, _) <- assignments
+        return $ OrderedConfVar (Just package) (Flag flag)
+
+      notAssigned :: OrderedConfVar -> a -> Bool
+      notAssigned k _ = Set.notMember k assigned
+
+  HakeSolverState{hakeSolverVars} <- get
+  return . Map.elems $ Map.filterWithKey notAssigned hakeSolverVars
 
 getInstallationPlan
   :: Platform -- ^ Target Platform
