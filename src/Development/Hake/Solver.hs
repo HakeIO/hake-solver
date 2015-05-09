@@ -163,18 +163,16 @@ getConfVar pkg k = do
 getCondTree
   :: PackageName
   -> CondTree ConfVar [Dependency] a
-  -> (a -> [Dependency])
   -> HakeSolverT Z3 (Maybe AST)
-getCondTree pkg CondNode{condTreeConstraints, condTreeComponents, condTreeData} dataDependencies = do
-  deps <- traverse getDependency $ dataDependencies condTreeData
+getCondTree pkg CondNode{condTreeConstraints, condTreeComponents, condTreeData} = do
   constraints <- traverse getDependency condTreeConstraints
   components <- for condTreeComponents $ \ (cond, child, _mchild) -> do
     condVar <- condL . unTC =<< traverse (getConfVar pkg) (TraversableCondition cond)
-    mchildVar <- getCondTree pkg child dataDependencies
+    mchildVar <- getCondTree pkg child
     case mchildVar of
       Just childVar -> Z3.mkAnd [condVar, childVar]
       Nothing -> return condVar
-  case deps <> constraints <> components of
+  case constraints <> components of
     [] -> return Nothing
     xs -> Just <$> combineWith Z3.mkAnd xs
 
@@ -256,7 +254,7 @@ getPackage pkgId
               -- getCondTree may make recursive calls into getPackage. I'm not sure if Cabal internally supports
               -- bidirectional dependencies (parent <=> child) so it may be better to insert a Z3.false constant instead.
               State.modify $ \ s@HakeSolverState{hakeSolverPkgs = pkgs} -> s{hakeSolverPkgs = Map.insert pkgId self pkgs}
-              mdeps <- getCondTree (pkgName pkgId) condNode (targetBuildDepends . libBuildInfo)
+              mdeps <- getCondTree (pkgName pkgId) condNode
               traverse_ (Z3.assert <=< Z3.mkImplies self) mdeps
               return self
 
