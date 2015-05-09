@@ -1,14 +1,12 @@
 module Development.Hake.OrderedConfVar where
 
-import Data.Monoid ((<>))
-import Distribution.Package (PackageName(..))
 import Distribution.PackageDescription (ConfVar(..))
 
-data OrderedConfVar = OrderedConfVar (Maybe PackageName) ConfVar deriving Eq
+data OrderedConfVar = OrderedConfVar ConfVar deriving Eq
 
 instance Ord OrderedConfVar where
-  OrderedConfVar lp lv `compare` OrderedConfVar rp rv =
-    compare lp rp <> case (lv, rv) of
+  OrderedConfVar lv `compare` OrderedConfVar rv =
+    case (lv, rv) of
       (OS     x, OS     y) -> compare x y
       (OS     _,        _) -> LT
       (Arch   x, Arch   y) -> compare x y
