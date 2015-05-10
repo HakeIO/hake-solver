@@ -203,7 +203,7 @@ getCondTree pkg CondNode{condTreeConstraints, condTreeComponents} = do
   components <- for condTreeComponents $ \ (cond, child, _mchild) -> do
     condVar <- condL . unTC =<< traverse (getConfVar pkg) (TraversableCondition cond)
     getCondTree pkg child >>= \ case
-      Just childVar -> Z3.mkAnd [condVar, childVar]
+      Just childVar -> Z3.mkImplies condVar childVar
       Nothing -> return condVar
   case constraints <> components of
     [] -> return Nothing
