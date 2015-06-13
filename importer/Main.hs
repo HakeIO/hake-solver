@@ -1,4 +1,6 @@
 {-# LANGUAGE BangPatterns #-}
+{-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE RecordWildCards #-}
 
 module Main where
 
@@ -11,18 +13,78 @@ import System.FilePath
 import System.IO
 import System.Process (readCreateProcessWithExitCode, shell)
 
+import Data.Aeson as Aeson
+
+import qualified Data.Vector as V
+
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as T
 import qualified Data.Text.Encoding.Error as T
 import qualified Data.Text.Lazy as Tl
 import qualified Data.Text.Lazy.Encoding as Tl
 
+import Distribution.ModuleName (ModuleName)
 import Distribution.Package
+import Distribution.PackageDescription
 import Distribution.PackageDescription.Parse
 import Distribution.Text (display)
+import Distribution.Version
 
 import qualified Data.ByteString.Lazy as Bl
-import qualified Database.LevelDB as LevelDB
+
+instance ToJSON GenericPackageDescription where
+  toJSON GenericPackageDescription{..} = object
+    [ "flags" .= toJSON genPackageFlags
+    , "libraries" .= toJSON condLibrary
+    ]
+
+instance ToJSON Flag where
+  toJSON MkFlag{flagName = FlagName name, ..} = object
+    [ "name" .= name
+    , "description" .= flagDescription
+    , "default" .= flagDefault
+    , "manual" .= flagManual
+    ]
+
+instance (ToJSON v, ToJSON c, ToJSON a) => ToJSON (CondTree v c a) where
+  toJSON CondNode{..} = object
+    [ "data" .= toJSON condTreeData
+    , "constraints" .= toJSON condTreeConstraints
+    , "components" .= toJSON condTreeComponents
+    ]
+
+instance ToJSON c => ToJSON (Condition c) where
+  toJSON (Var c) = toJSON c
+  toJSON (Lit f) = toJSON f
+  toJSON (CNot c) = object ["not" .= toJSON c]
+  toJSON (COr l r) = object ["or" .= V.fromList [toJSON l, toJSON r]]
+  toJSON (CAnd l r) = object ["and" .= V.fromList [toJSON l, toJSON r]]
+
+instance ToJSON ConfVar where
+  toJSON (OS os) = object ["os" .= display os]
+  toJSON (Arch arch) = object ["arch" .= display arch]
+  toJSON (Flag (FlagName flagName)) = object ["flag" .= flagName]
+  toJSON (Impl compiler version) = object ["compiler" .= display compiler, "version" .= toJSON version]
+
+instance ToJSON VersionRange where
+  toJSON = toJSON . display
+
+instance ToJSON Version where
+  toJSON = toJSON . display
+
+instance ToJSON Dependency where
+  toJSON (Dependency package version) = object
+    [ "package" .= display package
+    , "version" .= toJSON version
+    ]
+
+instance ToJSON Library where
+  toJSON Library{..} = object
+    [ "library" .= toJSON ("hum" :: String)
+    ]
+
+instance ToJSON ModuleName where
+  toJSON = toJSON . display
 
 packageTarball :: IO String
 packageTarball = do
@@ -44,29 +106,20 @@ foldEntriesM f = step where
   step _ (Fail e) = liftIO $ throwIO e
 
 loadPackageDescriptions
-  :: LevelDB.DB
-  -> ()
+  :: ()
   -> Entry
   -> ResourceT IO ()
-loadPackageDescriptions db !agg e
+loadPackageDescriptions !agg e
   | ".cabal" <- takeExtension (entryPath e)
   , NormalFile lbs _fs <- entryContent e
   , ParseOk _ gpd <- parsePackageDescription (Tl.unpack (Tl.decodeUtf8With T.ignore lbs)) = do
-      liftIO $ do
-        putChar '.'
-        hFlush stdout
-      let key = T.encodeUtf8 . T.pack . display $ packageId gpd
-          value = Bl.toStrict lbs
-      LevelDB.put db LevelDB.defaultWriteOptions{LevelDB.sync = False} key value
+      liftIO . Bl.putStrLn $ encode gpd
 
   | otherwise = liftIO $ do
-      putChar 'x'
-      hFlush stdout
       return agg
 
 main :: IO ()
 main = runResourceT $ do
-  db <- LevelDB.open "/tmp/hackagedb" LevelDB.defaultOptions{LevelDB.createIfMissing = True}
   entries <- liftIO $ Tar.read <$> (Bl.readFile =<< packageTarball)
-  _ <- foldEntriesM (loadPackageDescriptions db) () entries
+  _ <- foldEntriesM (loadPackageDescriptions) () entries
   return ()

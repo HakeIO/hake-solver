@@ -10,8 +10,6 @@ import Data.Map.Lazy as Map
 import System.IO
 import Z3.Monad as Z3
 
-import qualified Database.LevelDB as LevelDB
-
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as T
 import qualified Data.Text.Encoding.Error as T
@@ -24,6 +22,7 @@ import Distribution.Version
 
 import Development.Hake.Solver
 
+{-
 loadGlobalDatabase
   :: HakeSolverT Z3 ()
 loadGlobalDatabase = do
@@ -102,3 +101,7 @@ main = do
       putStrLn "found model"
       putStr str
     _ -> print x
+-}
+
+main :: IO ()
+main = return ()

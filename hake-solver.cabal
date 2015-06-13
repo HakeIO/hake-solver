@@ -44,22 +44,23 @@ executable solver-import
   other-modules:
   build-depends:
     base                       >= 4.7 && < 5,
+    aeson,
     binary,
     bytestring,
     Cabal,
     containers,
     filepath,
     mtl,
-    leveldb-haskell,
     process,
     resourcet,
     tar,
     text,
-    transformers
+    transformers,
+    vector
   ghc-options:
     -Wall -rtsopts -static
   extra-libraries:
-    leveldb, stdc++
+    stdc++
 
 test-suite solver-test
   default-language:
@@ -72,11 +73,11 @@ test-suite solver-test
     Main.hs
   build-depends:
     base                       >= 4.7 && < 5,
+    aeson,
     bytestring,
     Cabal,
     containers,
     hake-solver,
-    leveldb-haskell,
     mtl,
     resourcet,
     text,
@@ -90,7 +91,7 @@ test-suite solver-test
   ghc-options:
     -Wall -rtsopts -static
   extra-libraries:
-    leveldb, stdc++
+    stdc++
 
 source-repository head
   type:     git
