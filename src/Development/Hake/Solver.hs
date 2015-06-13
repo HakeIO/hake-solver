@@ -296,20 +296,20 @@ createPackageIdentifierFlag pid@PackageIdentifier{pkgName} MkFlag{flagName, flag
   st@HakeSolverState{hakeSolverPackageIdFlag} <- get
   let flagKey = (pid, flagName)
   case Map.lookup flagKey hakeSolverPackageIdFlag of
-    Just flag -> return ()
+    Just _flag -> return ()
     Nothing -> do
       FlagState{flagSpecified, flagValue} <- getPackageFlag pkgName flagName
 
       flag <- case (flagManual, flagDefault) of
         -- if the flag is marked as manual, use the default unless the user has supplied a setting
-        (True,  _) -> Z3.mkIte flagSpecified flagValue =<< Z3.mkBool flagDefault
+        (True, _) -> Z3.mkIte flagSpecified flagValue =<< Z3.mkBool flagDefault
 
         -- the flag maxsat loop is going to default to true but this package version
         -- has the default as false. so invert the package flag unless it was overridden
-        (_, False) -> Z3.mkIte flagSpecified flagValue =<< Z3.mkNot flagValue
+        (False, False) -> Z3.mkIte flagSpecified flagValue =<< Z3.mkNot flagValue
 
         -- the flag is automatic and defaults to true, lining up with solver's logic
-        (_,  True) -> return flagValue
+        (False,  True) -> return flagValue
 
       put $! st{hakeSolverPackageIdFlag = Map.insert flagKey flag hakeSolverPackageIdFlag}
 
