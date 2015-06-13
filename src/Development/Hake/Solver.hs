@@ -12,6 +12,7 @@ import qualified Data.List as List
 import Data.Map.Lazy (Map)
 import qualified Data.Map.Lazy as Map
 import Data.Monoid
+import Data.Ord (comparing)
 import Data.Set (Set)
 import qualified Data.Set as Set
 import Data.Traversable
@@ -99,6 +100,8 @@ data HakeSolverState = HakeSolverState
   , hakeSolverPackageFlag   :: !(Map (PackageName, FlagName) FlagState)
   , hakeSolverPackageIdFlag :: !(Map (PackageIdentifier, FlagName) AST)
   , hakeSolverPkgs          :: !(Map PackageIdentifier AST)
+  , hakeSolverPriorities    :: PackageName -> PackageName -> Ordering
+  , hakeSolverDependencies  :: !(Set PackageName)
   }
 
 defaultSolverState :: HakeSolverState
@@ -109,6 +112,8 @@ defaultSolverState =
     , hakeSolverPackageFlag   = Map.empty
     , hakeSolverPackageIdFlag = Map.empty
     , hakeSolverPkgs          = Map.empty
+    , hakeSolverPriorities    = comparing $ \ (PackageName name) -> name
+    , hakeSolverDependencies  = Set.empty
     }
 
 newtype HakeSolverT m a = HakeSolverT {unHakeSolverT :: StateT HakeSolverState m a}
@@ -177,7 +182,7 @@ getGlobalConfVar k = do
     Nothing -> do
       let name = "##global/" ++ renderConfVar k
       v <- Z3.mkFreshBoolVar name
-      put st{hakeSolverVars = Map.insert k' v hakeSolverVars}
+      put $! st{hakeSolverVars = Map.insert k' v hakeSolverVars}
       return v
 
 -- |
@@ -270,7 +275,7 @@ getPackageFlag pkg k@(FlagName name) = do
       v <- FlagState
              <$> Z3.mkFreshBoolVar (name' ++ "#specified")
              <*> Z3.mkFreshBoolVar (name' ++ "#value")
-      put st{hakeSolverPackageFlag = Map.insert k' v hakeSolverPackageFlag}
+      put $! st{hakeSolverPackageFlag = Map.insert k' v hakeSolverPackageFlag}
       return v
 
 getPackageIdentifierFlag
@@ -320,6 +325,9 @@ getPackage pkgId
       Z3.mkTrue
 
   | otherwise = do
+      -- register this package into the set of all dependencies which we will use for the version pinning heuristics
+      State.modify' $ \ s@HakeSolverState{hakeSolverDependencies = deps} -> s{hakeSolverDependencies = Set.insert (pkgName pkgId) deps}
+
       mcachedVar <- Map.lookup pkgId <$> gets hakeSolverPkgs
       mgdesc <- packageVersionMapLookup pkgId <$> gets hakeSolverGenDesc
       case (mcachedVar, mgdesc) of
@@ -334,7 +342,7 @@ getPackage pkgId
 
               -- getCondTree may make recursive calls into getPackage. I'm not sure if Cabal internally supports
               -- bidirectional dependencies (parent <=> child) so it may be better to insert a Z3.false constant instead.
-              State.modify $ \ s@HakeSolverState{hakeSolverPkgs = pkgs} -> s{hakeSolverPkgs = Map.insert pkgId self pkgs}
+              State.modify' $ \ s@HakeSolverState{hakeSolverPkgs = pkgs} -> s{hakeSolverPkgs = Map.insert pkgId self pkgs}
               mdeps <- getCondTree pkgId condNode
               traverse_ (Z3.assert <=< Z3.mkImplies self) mdeps
               return self
@@ -456,25 +464,37 @@ getInstallationPlan
   -> Set PackageIdentifier -- ^ Currently installed packages
   -> Map PackageName FlagAssignment -- ^ Hard assignment for flags, covers both installed and uninstalled packages
   -> Map Dependency (Set Component) -- ^ Packages to install
-  -> [PackageName] -- ^ Priority order
   -> HakeSolverT Z3 InstallationPlan
-getInstallationPlan platform compiler installedPackages flagAssignments desiredPackages packagePriorities = do
+getInstallationPlan platform compiler installedPackages flagAssignments desiredPackages = do
   -- pin down the platform and compiler
   assertGlobalFlags platform compiler
 
-  -- and any user specified flag assignments
+  -- pin down already installed packages
+  for_ installedPackages $ \ packageIdentifer -> do
+    pkgVar <- getPackage packageIdentifer
+    Z3.assert pkgVar
+
+  -- add constraints for the desired packages to install
+  for_ (Map.keys desiredPackages) $ \ dependency -> do
+    depVar <- getDependency dependency
+    Z3.assert depVar
+
+  -- set the user specified flag assignments
   assertAssignedFlags flagAssignments
 
   -- select a single version for each package, in priority order
   -- note: this should run in better than O(n*m) time because
   -- we're folding over the partially solved constraint set
-  for_ packagePriorities $ \ packagePriority -> do
-    Just (_, pkgVar) <- getLatestVersion packagePriority
+  ordering <- gets hakeSolverPriorities
+  dependencies <- gets hakeSolverDependencies
+  for_ (List.sortBy ordering (Set.toList dependencies)) $ \ name -> do
+    Just (_, pkgVar) <- getLatestVersion name
     Z3.assert pkgVar
 
   -- once the versions have been selected we need to choose a flag
   -- assignment for any unbound flags, with a preference to True...
   -- this logic is pretty arbitrary but it is documented in Cabal
+  flags <- getUnassignedFlags flagAssignments
 
   -- TODO: for executables, tests, benchmarks there is no requirement that
   -- the selected package versions be consistent between eachother, so we'll
