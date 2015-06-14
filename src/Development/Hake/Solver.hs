@@ -1,5 +1,6 @@
 {-# LANGUAGE DeriveFunctor #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
+{-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE NamedFieldPuns #-}
 {-# LANGUAGE TupleSections #-}
 
@@ -11,6 +12,7 @@ import Data.Foldable (for_, traverse_)
 import qualified Data.List as List
 import Data.Map.Lazy (Map)
 import qualified Data.Map.Lazy as Map
+import Data.Maybe (catMaybes)
 import Data.Monoid
 import Data.Ord (comparing)
 import Data.Set (Set)
@@ -94,12 +96,17 @@ data FlagState = FlagState
   , flagValue :: AST
   }
 
+data PackageIdentifierVar = PackageIdentifierVar
+  { packageIdentifierName :: PackageIdentifier
+  , packageIdentifierVar :: AST
+  }
+
 data HakeSolverState = HakeSolverState
   { hakeSolverGenDesc       :: !(PackageVersionMap GenericPackageDescription)
   , hakeSolverVars          :: !(Map OrderedConfVar AST)
   , hakeSolverPackageFlag   :: !(Map (PackageName, FlagName) FlagState)
   , hakeSolverPackageIdFlag :: !(Map (PackageIdentifier, FlagName) AST)
-  , hakeSolverPkgs          :: !(Map PackageIdentifier AST)
+  , hakeSolverPkgs          :: !(Map PackageIdentifier PackageIdentifierVar)
   , hakeSolverPriorities    :: PackageName -> PackageName -> Ordering
   , hakeSolverDependencies  :: !(Set PackageName)
   }
@@ -192,7 +199,7 @@ getCondTree
   -> CondTree ConfVar [Dependency] a
   -> HakeSolverT Z3 (Maybe AST)
 getCondTree pkg CondNode{condTreeConstraints, condTreeComponents} = do
-  constraints <- traverse getDependency condTreeConstraints
+  constraints <- catMaybes <$> traverse getDependency condTreeConstraints
   components <- for condTreeComponents $ \ (cond, child, _mchild) -> do
     condVar <- condL . unTC =<< traverse (getConfVar pkg) (TraversableCondition cond)
     mchildVar <- getCondTree pkg child
@@ -217,9 +224,9 @@ combineWith f xs = f xs
 -- to be distinct, that will be addressed elsewere.
 getDependency
   :: Dependency
-  -> HakeSolverT Z3 AST
+  -> HakeSolverT Z3 (Maybe AST)
 getDependency (Dependency name verRange)
-  | name `elem` builtinPackages = Z3.mkTrue
+  | name `elem` builtinPackages = return Nothing
   | otherwise = do
       pkgs <- gets hakeSolverGenDesc
       case Map.lookup name pkgs of
@@ -229,15 +236,15 @@ getDependency (Dependency name verRange)
           let somePackage :: [Version] -> HakeSolverT Z3 AST
               somePackage xs = do
                 let packages = PackageIdentifier name <$> xs
-                combineWith Z3.mkOr =<< traverse getPackage packages
+                packages' <- traverse getPackage packages
+                combineWith Z3.mkOr $ packageIdentifierVar <$> packages'
 
           case List.filter (`withinRange` verRange) (Map.keys vers) of
-            [] -> Z3.mkFalse -- no versions within range
-            xs -> somePackage xs
+            [] -> fail "no versions within range"
+            xs -> Just <$> somePackage xs
 
         Nothing -> do
-          liftIO . putStrLn $ "missing package: " ++ show name
-          Z3.mkFalse
+          fail $ "missing package: " ++ show name
 
 getDependencyNodes
   :: Dependency
@@ -251,7 +258,7 @@ getDependencyNodes (Dependency name verRange)
           let somePackage :: [Version] -> HakeSolverT Z3 [(PackageIdentifier, AST)]
               somePackage xs = do
                 let packages = PackageIdentifier name <$> xs
-                traverse (\ x -> (x,) <$> getPackage x) packages
+                traverse (\ x -> (x,) . packageIdentifierVar <$> getPackage x) packages
 
           somePackage $ List.filter (`withinRange` verRange) (Map.keys vers)
 
@@ -316,13 +323,13 @@ createPackageIdentifierFlag pid@PackageIdentifier{pkgName} MkFlag{flagName, flag
 -- TODO: deal with BuildInfo{buildable}
 getPackage
   :: PackageIdentifier
-  -> HakeSolverT Z3 AST
+  -> HakeSolverT Z3 PackageIdentifierVar
 getPackage pkgId
   | pkgName pkgId `elem` builtinPackages =
       -- packages installed with GHC don't have .cabal files in hackage
       -- eventually these should have their cabal files added in so this
       -- special case could be removed
-      Z3.mkTrue
+      PackageIdentifierVar pkgId <$> Z3.mkTrue
 
   | otherwise = do
       -- register this package into the set of all dependencies which we will use for the version pinning heuristics
@@ -332,10 +339,10 @@ getPackage pkgId
       mgdesc <- packageVersionMapLookup pkgId <$> gets hakeSolverGenDesc
       case (mcachedVar, mgdesc) of
         (Just cachedVar, _) -> return cachedVar
-        (Nothing, Nothing) -> trace "wtf2" Z3.mkFalse
+        (Nothing, Nothing) -> fail "no matching packages?"
         (_, Just gdesc@GenericPackageDescription{genPackageFlags})
           | Just condNode <- condLibrary gdesc -> do
-              self <- Z3.mkFreshBoolVar $ renderOneLine pkgId
+              self <- PackageIdentifierVar pkgId <$> do Z3.mkFreshBoolVar $ renderOneLine pkgId
 
               -- flags need to be created before the condition tree is resolved
               for_ genPackageFlags (createPackageIdentifierFlag pkgId)
@@ -344,11 +351,11 @@ getPackage pkgId
               -- bidirectional dependencies (parent <=> child) so it may be better to insert a Z3.false constant instead.
               State.modify' $ \ s@HakeSolverState{hakeSolverPkgs = pkgs} -> s{hakeSolverPkgs = Map.insert pkgId self pkgs}
               mdeps <- getCondTree pkgId condNode
-              traverse_ (Z3.assert <=< Z3.mkImplies self) mdeps
+              traverse_ (Z3.assert <=< Z3.mkImplies (packageIdentifierVar self)) mdeps
               return self
 
           -- pretend we can always build executables (like cpphs) for now
-          | otherwise -> Z3.mkTrue
+          | otherwise -> PackageIdentifierVar pkgId <$> Z3.mkTrue
 
 getDistinctVersion
   :: Dependency
@@ -359,11 +366,11 @@ getDistinctVersion (Dependency pkgName _) = do
     Just k ->
      case Map.elems k of
        [] -> fail "cannot make an empty set distinct?"
-       [x] -> return x
+       [x] -> return $ packageIdentifierVar x
        xs -> do
          zero <- Z3.mkInteger 0
          one <- Z3.mkInteger 1
-         let distinct l = Z3.mkIte l one zero
+         let distinct l = Z3.mkIte (packageIdentifierVar l) one zero
          assigned <- Z3.mkAdd =<< traverse distinct xs
          Z3.mkEq assigned one
     Nothing -> trace ("assertDistinctVersion couldn't find: " ++ show pkgName) Z3.mkFalse
@@ -379,7 +386,7 @@ getLatestVersion pkgName = do
       let step [] = return Nothing
           step (pkgVer:ys) = do
             let pkgId = PackageIdentifier pkgName pkgVer
-            pkgVar <- getPackage pkgId
+            pkgVar <- packageIdentifierVar <$> getPackage pkgId
             res <- Z3.local $ do
               Z3.assert pkgVar
               Z3.check
@@ -471,13 +478,14 @@ getInstallationPlan platform compiler installedPackages flagAssignments desiredP
 
   -- pin down already installed packages
   for_ installedPackages $ \ packageIdentifer -> do
-    pkgVar <- getPackage packageIdentifer
-    Z3.assert pkgVar
+    getPackage packageIdentifer >>= \case
+      PackageIdentifierVar _ pkgVar -> Z3.assert pkgVar
 
   -- add constraints for the desired packages to install
   for_ (Map.keys desiredPackages) $ \ dependency -> do
-    depVar <- getDependency dependency
-    Z3.assert depVar
+    getDependency dependency >>= \case
+      Just depVar -> Z3.assert depVar
+      Nothing -> return ()
 
   -- set the user specified flag assignments
   assertAssignedFlags flagAssignments
