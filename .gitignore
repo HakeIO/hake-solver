@@ -2,6 +2,9 @@
 .cabal-sandbox/
 cabal.sandbox.config
 
+# Stack
+.stack-work/
+
 # Shake related
 .shake.children
 .shake.database
