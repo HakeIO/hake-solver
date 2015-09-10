@@ -99,10 +99,10 @@ main = do
 
   let prog = do
         setASTPrintMode Z3_PRINT_SMTLIB2_COMPLIANT
-        ghcFlag <- getConfVar (PackageName "##global") (Impl GHC anyVersion)
+        ghcFlag <- getGlobalConfVar (Impl GHC anyVersion)
         assert ghcFlag
 
-        x <- getDependency $ Dependency (PackageName "Coroutine") anyVersion
+        Just x <- getDependency $ Dependency (PackageName "Coroutine") anyVersion
         bs <- astToString x
         liftIO $ putStrLn bs
 
