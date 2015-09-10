@@ -202,7 +202,7 @@ getCondTree pkg CondNode{condTreeConstraints, condTreeComponents} = do
   constraints <- catMaybes <$> traverse getDependency condTreeConstraints
   components <- for condTreeComponents $ \ (cond, child, _mchild) -> do
     condVar <- condL . unTC =<< traverse (getConfVar pkg) (TraversableCondition cond)
-    getCondTree pkg child >>= \case
+    getCondTree pkg child >>= \ case
       Just childVar -> Z3.mkAnd [condVar, childVar]
       Nothing -> return condVar
   case constraints <> components of
@@ -482,7 +482,7 @@ getInstallationPlan platform compiler installedPackages flagAssignments desiredP
 
   -- add constraints for the desired packages to install
   for_ (Map.keys desiredPackages) $ \ dependency ->
-    getDependency dependency >>= \case
+    getDependency dependency >>= \ case
       Just depVar -> Z3.assert depVar
       Nothing -> return ()
 
