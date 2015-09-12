@@ -62,7 +62,28 @@ executable solver-import
   extra-libraries:
     stdc++
 
-test-suite solver-test
+test-suite solver-unit-tests
+  default-language:
+    Haskell2010
+  hs-source-dirs:
+    tests
+  type:
+    exitcode-stdio-1.0
+  main-is:
+    UnitTests.hs
+  build-depends:
+    base                       >= 4.7 && < 5,
+    Cabal,
+    containers,
+    hake-solver,
+    mtl,
+    z3,
+    tasty,
+    tasty-hunit
+  ghc-options:
+    -Wall -rtsopts -static
+
+test-suite solver-hackage-test
   default-language:
     Haskell2010
   hs-source-dirs:
