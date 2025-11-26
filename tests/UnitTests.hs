@@ -10,13 +10,25 @@ import Data.List (nub, sort)
 import Data.Maybe (mapMaybe)
 import qualified Data.Set as Set
 import qualified Data.Map.Lazy as Map
-import Z3.Monad as Z3
+import Z3.Monad as Z3 hiding (Version)
 
-import Distribution.Compiler
-import Distribution.Package
-import Distribution.PackageDescription
-import Distribution.System
-import Distribution.Version
+import Distribution.Compiler (CompilerId(..), CompilerFlavor(..))
+import Distribution.Types.PackageId (PackageIdentifier(..))
+import Distribution.Types.PackageName (PackageName, mkPackageName, unPackageName)
+import Distribution.Types.GenericPackageDescription (GenericPackageDescription(..))
+import Distribution.Types.ConfVar (ConfVar(..))
+import Distribution.Types.PackageDescription (emptyPackageDescription)
+import qualified Distribution.Types.PackageDescription as PD
+import Distribution.Types.Flag (PackageFlag(..), FlagName, mkFlagName)
+import Distribution.Types.Library (emptyLibrary)
+import Distribution.Types.Dependency (Dependency, mkDependency)
+import Distribution.Types.CondTree (CondTree(..), CondBranch(..))
+import Distribution.Types.Condition (Condition(..))
+import Distribution.Types.LibraryName (defaultLibName)
+import Distribution.System (Platform(..), Arch(..), OS(..))
+import Distribution.Types.Version (Version, mkVersion, versionNumbers)
+import Distribution.Types.VersionRange (VersionRange, anyVersion, thisVersion, intersectVersionRanges, orLaterVersion, earlierVersion)
+import qualified Distribution.Compat.NonEmptySet as NES
 
 import Test.Tasty
 import Test.Tasty.HUnit
@@ -77,7 +89,10 @@ test targets available expected = do
 getPkgIdentifiers :: InstallPlan -> [TestPackageIdentifier]
 getPkgIdentifiers installPlan =
   sort $ map getPI $ Set.toList $ installPlanPackages installPlan where
-  getPI (PackageIdentifier pn v) = PI (unPackageName pn) (head $ versionBranch v)
+  getPI (PackageIdentifier pn v) = 
+    case versionNumbers v of
+      (n:_) -> PI (unPackageName pn) n
+      [] -> PI (unPackageName pn) 0
 
 solve :: [TestPackageName] -> [TestPackage] -> IO (Maybe InstallPlan)
 solve targets available = do
@@ -100,9 +115,12 @@ solve targets available = do
     st = defaultSolverState { hakeSolverGenDesc = pkgs }
 
     targetMap = Map.fromList
-                [(Dependency (PackageName pn) anyVersion, libComp) | pn <- targets]
+                [(mkDep (mkPackageName pn) anyVersion, libComp) | pn <- targets]
 
     libComp = Set.singleton $ EveryComponent Development.Hake.Solver.Library
+
+mkDep :: PackageName -> VersionRange -> Dependency
+mkDep name vr = mkDependency name vr (NES.singleton defaultLibName)
 
 data InstallPlan = InstallPlan
   { installPlanPackages :: Set.Set PackageIdentifier
@@ -124,16 +142,19 @@ genPkgDesc pkg@(Pkg _ _ deps) =
   GenericPackageDescription {
       packageDescription =
         emptyPackageDescription {
-          package = getPackageIdentifier pkg
-        , library = Just emptyLibrary
+          PD.package = getPackageIdentifier pkg
+        , PD.library = Just emptyLibrary
         }
+    , gpdScannedVersion = Nothing
     , genPackageFlags = flags
     , condLibrary = Just $ toLibrary deps
+    , condSubLibraries = []
+    , condForeignLibs = []
     , condExecutables = []
     , condTestSuites = []
     , condBenchmarks = []
     } where
-  flags = nub $ map (\fn -> MkFlag (FlagName fn) "" True False) $
+  flags = nub $ map (\fn -> MkPackageFlag (mkFlagName fn) "" True False) $
           concatMap getFlags deps
 
   getFlags (Cond c ds1 ds2) =
@@ -144,27 +165,25 @@ genPkgDesc pkg@(Pkg _ _ deps) =
 
   toLibrary ds = CondNode emptyLibrary (mapMaybe directDep ds)
                                        (mapMaybe components ds) where
-    directDep (Any pn) = Just $ Dependency (PackageName pn) anyVersion
+    directDep (Any pn) = Just $ mkDep (mkPackageName pn) anyVersion
     directDep (Exact pn v) =
-        Just $ Dependency (PackageName pn) $ thisVersion $ simpleVersion v
+        Just $ mkDep (mkPackageName pn) $ thisVersion $ simpleVersion v
     directDep (Range pn v1 v2) =
-        Just $ Dependency (PackageName pn) $
+        Just $ mkDep (mkPackageName pn) $
         intersectVersionRanges (orLaterVersion $ simpleVersion v1)
                                (earlierVersion $ simpleVersion v2)
     directDep Cond{} = Nothing
 
     components (Cond cond ds1 ds2) =
-        Just ( unTC $ (Flag . FlagName) `fmap` TraversableCondition cond
-             , toLibrary ds1
-             , Just $ toLibrary ds2)
+        Just $ CondBranch
+                 (unTC $ (PackageFlag . mkFlagName) `fmap` TraversableCondition cond)
+                 (toLibrary ds1)
+                 (Just $ toLibrary ds2)
     components _ = Nothing
 
-simpleVersion :: Int -> Distribution.Version.Version
-simpleVersion v = Distribution.Version.Version [v] []
+simpleVersion :: Int -> Version
+simpleVersion v = mkVersion [v]
 
 getPackageIdentifier :: TestPackage -> PackageIdentifier
 getPackageIdentifier (Pkg pn v _) =
-  PackageIdentifier (PackageName pn) (simpleVersion v)
-
-deriving instance Ord Dependency
-deriving instance Ord VersionRange
+  PackageIdentifier (mkPackageName pn) (simpleVersion v)

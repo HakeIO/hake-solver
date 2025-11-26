@@ -1,7 +1,6 @@
 module Development.Hake.TraversableCondition where
 
-import Distribution.PackageDescription (Condition(..))
-import Data.Monoid
+import Distribution.Types.Condition (Condition(..))
 
 newtype TraversableCondition a = TraversableCondition {unTC :: Condition a}
 

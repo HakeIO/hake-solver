@@ -6,25 +6,32 @@
 
 module Development.Hake.Solver where
 
-import Control.Monad.Trans
+import Control.Monad ((<=<))
 import Control.Monad.State.Strict as State
 import Data.Foldable (for_, traverse_)
 import qualified Data.List as List
 import Data.Map.Lazy (Map)
 import qualified Data.Map.Lazy as Map
 import Data.Maybe (catMaybes)
-import Data.Monoid
 import Data.Ord (comparing)
 import Data.Set (Set)
 import qualified Data.Set as Set
 import Data.Traversable
 import Distribution.Compiler (CompilerId(..))
-import Distribution.Package (Dependency(..), PackageIdentifier(..), PackageName(..))
-import Distribution.PackageDescription
+import Distribution.Types.Dependency (Dependency(..), depPkgName, depVerRange)
+import Distribution.Types.PackageId (PackageIdentifier(..))
+import Distribution.Types.PackageName (PackageName, mkPackageName, unPackageName)
+import Distribution.Types.GenericPackageDescription (GenericPackageDescription(..))
+import Distribution.Types.ConfVar (ConfVar(..))
+import Distribution.Types.PackageDescription (PackageDescription)
+import Distribution.Types.Flag (PackageFlag(..), FlagName, FlagAssignment, unFlagName, unFlagAssignment)
+import Distribution.Types.CondTree (CondTree, CondBranch(..))
+import qualified Distribution.Types.CondTree as CondTree
+import Distribution.Types.Condition (Condition(..))
 import Distribution.System
-import Distribution.Text (Text, disp)
-import Distribution.Version
-import Text.PrettyPrint hiding ((<>), ($$))
+import Distribution.Pretty (Pretty, prettyShow)
+import Distribution.Types.Version (Version)
+import Distribution.Types.VersionRange (withinRange, thisVersion)
 import Z3.Monad (AST, Z3, Z3Env)
 import qualified Z3.Monad as Z3
 
@@ -33,13 +40,13 @@ import Development.Hake.TraversableCondition
 
 import Debug.Trace (trace)
 
-renderOneLine :: Text a => a -> String
-renderOneLine = renderStyle style{mode=OneLineMode} . disp
+renderOneLine :: Pretty a => a -> String
+renderOneLine = prettyShow
 
 renderConfVar :: ConfVar -> String
 renderConfVar (OS x) = "os##" ++ renderOneLine x
 renderConfVar (Arch x) = "arch##" ++ renderOneLine x
-renderConfVar (Flag (FlagName x)) = "flag##" ++ x
+renderConfVar (PackageFlag fn) = "flag##" ++ unFlagName fn
 renderConfVar (Impl x _) = "impl##" ++ renderOneLine x -- ++ y
 
 -- | Convert a Cabal condition tree into a Z3 expression
@@ -52,7 +59,7 @@ condL (COr x y)   = Z3.mkOr =<< traverse condL [x, y]
 condL (CAnd x y)  = Z3.mkAnd =<< traverse condL [x, y]
 
 builtinPackages :: [PackageName]
-builtinPackages = map PackageName
+builtinPackages = map mkPackageName
   [ "rts"
   , "ffi"
   , "ghc"
@@ -92,8 +99,8 @@ packageVersionMapInsert k = Map.insertWith mappend (pkgName k) . Map.singleton (
 -- if flagSpecified == True then flagValue has been asserted by the user and should override a default
 -- otherwise flagValue will default to True but may be set to False as needed to find a valid plan
 data FlagState = FlagState
-  { flagSpecified :: AST
-  , flagValue :: AST
+  { flagStateSpecified :: AST
+  , flagStateValue :: AST
   }
 
 data PackageIdentifierVar = PackageIdentifierVar
@@ -119,12 +126,12 @@ defaultSolverState =
     , hakeSolverPackageFlag   = Map.empty
     , hakeSolverPackageIdFlag = Map.empty
     , hakeSolverPkgs          = Map.empty
-    , hakeSolverPriorities    = comparing $ \ (PackageName name) -> name
+    , hakeSolverPriorities    = comparing unPackageName
     , hakeSolverDependencies  = Set.empty
     }
 
 newtype HakeSolverT m a = HakeSolverT {unHakeSolverT :: StateT HakeSolverState m a}
-  deriving (Applicative, Functor, Monad, MonadIO, MonadTrans, MonadState HakeSolverState)
+  deriving (Applicative, Functor, Monad, MonadFail, MonadIO, MonadTrans, MonadState HakeSolverState)
 
 instance Z3.MonadZ3 m => Z3.MonadZ3 (HakeSolverT m) where
   getSolver = lift Z3.getSolver
@@ -172,7 +179,7 @@ getConfVar
   :: PackageIdentifier
   -> ConfVar
   -> HakeSolverT Z3 AST
-getConfVar pkg (Flag flagName) = getPackageIdentifierFlag pkg flagName
+getConfVar pkg (PackageFlag fn) = getPackageIdentifierFlag pkg fn
 getConfVar _ k = getGlobalConfVar k
 
 getGlobalConfVar
@@ -198,9 +205,9 @@ getCondTree
   :: PackageIdentifier
   -> CondTree ConfVar [Dependency] a
   -> HakeSolverT Z3 (Maybe AST)
-getCondTree pkg CondNode{condTreeConstraints, condTreeComponents} = do
-  constraints <- catMaybes <$> traverse getDependency condTreeConstraints
-  components <- for condTreeComponents $ \ (cond, child, _mchild) -> do
+getCondTree pkg condNode = do
+  constraints <- catMaybes <$> traverse getDependency (CondTree.condTreeConstraints condNode)
+  components <- for (CondTree.condTreeComponents condNode) $ \ (CondBranch cond child _mchild) -> do
     condVar <- condL . unTC =<< traverse (getConfVar pkg) (TraversableCondition cond)
     getCondTree pkg child >>= \ case
       Just childVar -> Z3.mkImplies condVar childVar
@@ -224,7 +231,7 @@ combineWith f xs = f xs
 getDependency
   :: Dependency
   -> HakeSolverT Z3 (Maybe AST)
-getDependency (Dependency name verRange)
+getDependency dep
   | name `elem` builtinPackages = return Nothing
   | otherwise = do
       pkgs <- gets hakeSolverGenDesc
@@ -244,11 +251,14 @@ getDependency (Dependency name verRange)
 
         Nothing -> do
           fail $ "missing package: " ++ show name
+  where
+    name = depPkgName dep
+    verRange = depVerRange dep
 
 getDependencyNodes
   :: Dependency
   -> HakeSolverT Z3 [(PackageIdentifier, AST)]
-getDependencyNodes (Dependency name verRange)
+getDependencyNodes dep
   | name `elem` builtinPackages = return []
   | otherwise = do
       pkgs <- gets hakeSolverGenDesc
@@ -264,12 +274,15 @@ getDependencyNodes (Dependency name verRange)
         Nothing -> do
           liftIO . putStrLn $ "missing package: " ++ show name
           return []
+  where
+    name = depPkgName dep
+    verRange = depVerRange dep
 
 getPackageFlag
   :: PackageName
   -> FlagName
   -> HakeSolverT Z3 FlagState
-getPackageFlag pkg k@(FlagName name) = do
+getPackageFlag pkg k = do
   let k' = (pkg, k)
 
   -- check to see if we have a cached z3 variable, otherwise create one
@@ -277,7 +290,7 @@ getPackageFlag pkg k@(FlagName name) = do
   case Map.lookup k' hakeSolverPackageFlag of
     Just v -> return v
     Nothing -> do
-      let name' = renderOneLine pkg ++ "/flag##" ++ name
+      let name' = renderOneLine pkg ++ "/flag##" ++ unFlagName k
       v <- FlagState
              <$> Z3.mkFreshBoolVar (name' ++ "#specified")
              <*> Z3.mkFreshBoolVar (name' ++ "#value")
@@ -288,34 +301,35 @@ getPackageIdentifierFlag
   :: PackageIdentifier
   -> FlagName
   -> HakeSolverT Z3 AST
-getPackageIdentifierFlag pid flagName = do
+getPackageIdentifierFlag pid fn = do
   flags <- gets hakeSolverPackageIdFlag
-  case Map.lookup (pid, flagName) flags of
+  case Map.lookup (pid, fn) flags of
     Just flag -> return flag
     Nothing -> fail "oh no!" -- this is a bug eh
 
 createPackageIdentifierFlag
   :: PackageIdentifier
-  -> Flag
+  -> PackageFlag
   -> HakeSolverT Z3 ()
-createPackageIdentifierFlag pid@PackageIdentifier{pkgName} MkFlag{flagName, flagDefault, flagManual} = do
+createPackageIdentifierFlag pid@PackageIdentifier{pkgName} pkgFlag = do
   st@HakeSolverState{hakeSolverPackageIdFlag} <- get
-  let flagKey = (pid, flagName)
+  let fn = flagName pkgFlag
+      flagKey = (pid, fn)
   case Map.lookup flagKey hakeSolverPackageIdFlag of
     Just _flag -> return ()
     Nothing -> do
-      FlagState{flagSpecified, flagValue} <- getPackageFlag pkgName flagName
+      FlagState{flagStateSpecified, flagStateValue} <- getPackageFlag pkgName fn
 
-      flag <- case (flagManual, flagDefault) of
+      flag <- case (flagManual pkgFlag, flagDefault pkgFlag) of
         -- if the flag is marked as manual, use the default unless the user has supplied a setting
-        (True, _) -> Z3.mkIte flagSpecified flagValue =<< Z3.mkBool flagDefault
+        (True, _) -> Z3.mkIte flagStateSpecified flagStateValue =<< Z3.mkBool (flagDefault pkgFlag)
 
         -- the flag maxsat loop is going to default to true but this package version
         -- has the default as false. so invert the package flag unless it was overridden
-        (False, False) -> Z3.mkIte flagSpecified flagValue =<< Z3.mkNot flagValue
+        (False, False) -> Z3.mkIte flagStateSpecified flagStateValue =<< Z3.mkNot flagStateValue
 
         -- the flag is automatic and defaults to true, lining up with solver's logic
-        (False,  True) -> return flagValue
+        (False,  True) -> return flagStateValue
 
       put $! st{hakeSolverPackageIdFlag = Map.insert flagKey flag hakeSolverPackageIdFlag}
 
@@ -359,9 +373,9 @@ getPackage pkgId
 getDistinctVersion
   :: Dependency
   -> HakeSolverT Z3 AST
-getDistinctVersion (Dependency pkgName _) = do
+getDistinctVersion dep = do
   pkgs <- splitPackageIdentifiers <$> gets hakeSolverPkgs
-  case Map.lookup pkgName pkgs of
+  case Map.lookup (depPkgName dep) pkgs of
     Just k ->
      case Map.elems k of
        [] -> fail "cannot make an empty set distinct?"
@@ -372,7 +386,7 @@ getDistinctVersion (Dependency pkgName _) = do
          let distinct l = Z3.mkIte (packageIdentifierVar l) one zero
          assigned <- Z3.mkAdd =<< traverse distinct xs
          Z3.mkEq assigned one
-    Nothing -> trace ("assertDistinctVersion couldn't find: " ++ show pkgName) Z3.mkFalse
+    Nothing -> trace ("assertDistinctVersion couldn't find: " ++ show (depPkgName dep)) Z3.mkFalse
 
 getLatestVersion
   :: PackageName
@@ -434,17 +448,17 @@ assertAssignedFlags
   -> HakeSolverT Z3 ()
 assertAssignedFlags flagAssignments =
   for_ (Map.toList flagAssignments) $ \ (package, assignments) ->
-    for_ assignments $ \ (flag, assignment) -> do
+    for_ (unFlagAssignment assignments) $ \ (flag, assignment) -> do
       -- get or create a flag within the scope of a package name
-      FlagState{flagSpecified, flagValue} <- getPackageFlag package flag
+      FlagState{flagStateSpecified, flagStateValue} <- getPackageFlag package flag
 
       -- use this setting instead of the default, required for manual flags
-      Z3.assert flagSpecified
+      Z3.assert flagStateSpecified
 
       -- and assert the flag
       if assignment
-        then Z3.assert flagValue
-        else Z3.assert =<< Z3.mkNot flagValue
+        then Z3.assert flagStateValue
+        else Z3.assert =<< Z3.mkNot flagStateValue
 
 -- |
 -- Return all nodes that do not have a user specified value
@@ -455,14 +469,14 @@ getUnassignedFlags flagAssignments = do
   let assigned :: Set (PackageName, FlagName)
       assigned = Set.fromList $ do
         (package, assignments) <- Map.toList flagAssignments
-        (flag, _) <- assignments
+        (flag, _) <- unFlagAssignment assignments
         return $ (package, flag)
 
       notAssigned :: (PackageName, FlagName) -> a -> Bool
       notAssigned k _ = Set.notMember k assigned
 
   HakeSolverState{hakeSolverPackageFlag} <- get
-  return . fmap flagValue . Map.elems $ Map.filterWithKey notAssigned hakeSolverPackageFlag
+  return . fmap flagStateValue . Map.elems $ Map.filterWithKey notAssigned hakeSolverPackageFlag
 
 getInstallationPlan
   :: Platform -- ^ Target Platform
