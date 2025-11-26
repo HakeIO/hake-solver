@@ -1,0 +1,61 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        ghc: ['9.4', '9.6', '9.8']
+      fail-fast: false
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Haskell
+        uses: haskell-actions/setup@v2
+        with:
+          ghc-version: ${{ matrix.ghc }}
+          cabal-version: '3.10'
+
+      - name: Install z3
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y z3 libz3-dev
+
+      - name: Cache Cabal packages
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cabal/packages
+            ~/.cabal/store
+            dist-newstyle
+          key: ${{ runner.os }}-cabal-${{ matrix.ghc }}-${{ hashFiles('**/*.cabal') }}
+          restore-keys: |
+            ${{ runner.os }}-cabal-${{ matrix.ghc }}-
+
+      - name: Update Cabal package list
+        run: cabal update
+
+      - name: Build dependencies
+        run: cabal build --only-dependencies --enable-tests
+
+      - name: Build
+        run: cabal build
+
+      - name: Run tests
+        run: cabal test
+
+      - name: Check package
+        run: cabal check
+
+      - name: Create source distribution
+        run: cabal sdist
