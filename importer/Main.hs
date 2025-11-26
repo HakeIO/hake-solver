@@ -1,6 +1,7 @@
 {-# LANGUAGE BangPatterns #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE RecordWildCards #-}
+{-# OPTIONS_GHC -Wno-orphans #-}
 
 module Main where
 
@@ -10,25 +11,24 @@ import Control.Monad.IO.Class
 import Control.Monad.Trans.Resource
 import System.Exit (ExitCode(ExitSuccess))
 import System.FilePath
-import System.IO
 import System.Process (readCreateProcessWithExitCode, shell)
 
 import Data.Aeson as Aeson
 
 import qualified Data.Vector as V
 
-import qualified Data.Text as T
-import qualified Data.Text.Encoding as T
-import qualified Data.Text.Encoding.Error as T
-import qualified Data.Text.Lazy as Tl
-import qualified Data.Text.Lazy.Encoding as Tl
-
 import Distribution.ModuleName (ModuleName)
-import Distribution.Package
-import Distribution.PackageDescription
-import Distribution.PackageDescription.Parse
-import Distribution.Text (display)
-import Distribution.Version
+import Distribution.Types.GenericPackageDescription (GenericPackageDescription(..))
+import Distribution.Types.ConfVar (ConfVar(..))
+import Distribution.Types.Flag (PackageFlag(..), unFlagName)
+import Distribution.Types.Library (Library(..))
+import Distribution.Types.Dependency (Dependency, depPkgName, depVerRange)
+import Distribution.Types.CondTree (CondTree(..), CondBranch(..))
+import Distribution.Types.Condition (Condition(..))
+import Distribution.Types.Version (Version)
+import Distribution.Types.VersionRange (VersionRange)
+import Distribution.Pretty (prettyShow)
+import Distribution.PackageDescription.Parsec (parseGenericPackageDescription, runParseResult)
 
 import qualified Data.ByteString.Lazy as Bl
 
@@ -38,9 +38,9 @@ instance ToJSON GenericPackageDescription where
     , "libraries" .= toJSON condLibrary
     ]
 
-instance ToJSON Flag where
-  toJSON MkFlag{flagName = FlagName name, ..} = object
-    [ "name" .= name
+instance ToJSON PackageFlag where
+  toJSON MkPackageFlag{..} = object
+    [ "name" .= unFlagName flagName
     , "description" .= flagDescription
     , "default" .= flagDefault
     , "manual" .= flagManual
@@ -53,6 +53,13 @@ instance (ToJSON v, ToJSON c, ToJSON a) => ToJSON (CondTree v c a) where
     , "components" .= toJSON condTreeComponents
     ]
 
+instance (ToJSON v, ToJSON c, ToJSON a) => ToJSON (CondBranch v c a) where
+  toJSON (CondBranch cond ifTrue maybeIfFalse) = object
+    [ "condition" .= toJSON cond
+    , "if-true" .= toJSON ifTrue
+    , "if-false" .= toJSON maybeIfFalse
+    ]
+
 instance ToJSON c => ToJSON (Condition c) where
   toJSON (Var c) = toJSON c
   toJSON (Lit f) = toJSON f
@@ -61,30 +68,30 @@ instance ToJSON c => ToJSON (Condition c) where
   toJSON (CAnd l r) = object ["and" .= V.fromList [toJSON l, toJSON r]]
 
 instance ToJSON ConfVar where
-  toJSON (OS os) = object ["os" .= display os]
-  toJSON (Arch arch) = object ["arch" .= display arch]
-  toJSON (Flag (FlagName flagName)) = object ["flag" .= flagName]
-  toJSON (Impl compiler version) = object ["compiler" .= display compiler, "version" .= toJSON version]
+  toJSON (OS os) = object ["os" .= prettyShow os]
+  toJSON (Arch arch) = object ["arch" .= prettyShow arch]
+  toJSON (PackageFlag fn) = object ["flag" .= unFlagName fn]
+  toJSON (Impl compiler version) = object ["compiler" .= prettyShow compiler, "version" .= toJSON version]
 
 instance ToJSON VersionRange where
-  toJSON = toJSON . display
+  toJSON = toJSON . prettyShow
 
 instance ToJSON Version where
-  toJSON = toJSON . display
+  toJSON = toJSON . prettyShow
 
 instance ToJSON Dependency where
-  toJSON (Dependency package version) = object
-    [ "package" .= display package
-    , "version" .= toJSON version
+  toJSON dep = object
+    [ "package" .= prettyShow (depPkgName dep)
+    , "version" .= toJSON (depVerRange dep)
     ]
 
 instance ToJSON Library where
-  toJSON Library{..} = object
+  toJSON _ = object
     [ "library" .= toJSON ("hum" :: String)
     ]
 
 instance ToJSON ModuleName where
-  toJSON = toJSON . display
+  toJSON = toJSON . prettyShow
 
 packageTarball :: IO String
 packageTarball = do
@@ -112,8 +119,13 @@ loadPackageDescriptions
 loadPackageDescriptions !agg e
   | ".cabal" <- takeExtension (entryPath e)
   , NormalFile lbs _fs <- entryContent e
-  , ParseOk _ gpd <- parsePackageDescription (Tl.unpack (Tl.decodeUtf8With T.ignore lbs)) = do
-      liftIO . Bl.putStrLn $ encode gpd
+  = do
+      let strictBs = Bl.toStrict lbs
+      case snd $ runParseResult $ parseGenericPackageDescription strictBs of
+        Left _ -> liftIO $ return agg
+        Right gpd -> liftIO $ do
+          Bl.putStr $ encode gpd
+          Bl.putStr "\n"
 
   | otherwise = liftIO $ do
       return agg

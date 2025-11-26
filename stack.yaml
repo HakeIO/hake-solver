@@ -1,5 +1,5 @@
 packages:
 - '.'
 extra-deps:
-- z3-4.1.0
-resolver: lts-3.4
+- z3-408.2
+resolver: lts-23.0

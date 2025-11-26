@@ -1,29 +1,24 @@
-env:
- - GHCVER=7.10.1
+language: haskell
+
+dist: focal
+
+ghc:
+  - "9.4"
+  - "9.6"
+  - "9.8"
+
+cabal: "3.10"
 
 before_install:
- - travis_retry sudo add-apt-repository -y ppa:hvr/ghc
- - travis_retry sudo add-apt-repository -y ppa:delcypher/smt
- - travis_retry sudo apt-get update
- - travis_retry sudo apt-get install cabal-install-1.22 ghc-$GHCVER alex-3.1.4 happy-1.19.3 z3 libleveldb-dev
- - export PATH=/opt/ghc/$GHCVER/bin:/opt/cabal/1.22/bin:/opt/alex/3.1.4/bin:/opt/happy/1.19.3/bin:$PATH
+  - sudo apt-get update
+  - sudo apt-get install -y z3 libz3-dev
 
 install:
- - cabal update
- - cabal install --only-dependencies --enable-tests --enable-benchmarks
+  - cabal update
+  - cabal build --only-dependencies --enable-tests
 
 script:
- - cabal configure --enable-tests --enable-benchmarks -v2
- - cabal build
- - cabal test
- - cabal check
- - cabal sdist
-
- - export SRC_TGZ=$(cabal info . | awk '{print $2 ".tar.gz";exit}') ;
-   cd dist/;
-   if [ -f "$SRC_TGZ" ]; then
-      cabal install "$SRC_TGZ";
-   else
-      echo "expected '$SRC_TGZ' not found";
-      exit 1;
-   fi
+  - cabal build
+  - cabal test
+  - cabal check
+  - cabal sdist

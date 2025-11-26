@@ -2,6 +2,9 @@
 .cabal-sandbox/
 cabal.sandbox.config
 
+# Cabal new-style builds
+dist-newstyle/
+
 # Stack
 .stack-work/
 

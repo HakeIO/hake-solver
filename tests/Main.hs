@@ -12,17 +12,18 @@ import System.Exit (ExitCode(ExitSuccess))
 import System.FilePath
 import System.IO
 import System.Process (readCreateProcessWithExitCode, shell)
-import Z3.Monad as Z3
+import Z3.Monad as Z3 hiding (Version)
 
-import qualified Data.Text.Encoding.Error as T
-import qualified Data.Text.Lazy as Tl
-import qualified Data.Text.Lazy.Encoding as Tl
-
-import Distribution.Compiler
-import Distribution.Package
-import Distribution.PackageDescription
-import Distribution.PackageDescription.Parse
-import Distribution.Version
+import Distribution.Compiler (CompilerId(..), CompilerFlavor(..))
+import Distribution.Types.PackageId (PackageIdentifier)
+import Distribution.Types.PackageName (mkPackageName)
+import Distribution.Types.GenericPackageDescription (GenericPackageDescription(..), ConfVar(..))
+import Distribution.Types.Dependency (Dependency, mkDependency)
+import Distribution.Types.LibraryName (defaultLibName)
+import Distribution.Types.VersionRange (anyVersion)
+import Distribution.PackageDescription.Parsec (parseGenericPackageDescription, runParseResult)
+import Distribution.Package (packageId)
+import qualified Distribution.Compat.NonEmptySet as NES
 
 import Development.Hake.Solver
 
@@ -62,10 +63,17 @@ loadPackageDescriptions
 loadPackageDescriptions !agg e
   | ".cabal" <- takeExtension (entryPath e)
   , NormalFile lbs _fs <- entryContent e
-  , ParseOk _ gpd <- parsePackageDescription (Tl.unpack (Tl.decodeUtf8With T.ignore lbs)) = do
-      putChar '.'
-      hFlush stdout
-      return $ Map.insert (packageId gpd) gpd agg
+  = do
+      let strictBs = Bl.toStrict lbs
+      case snd $ runParseResult $ parseGenericPackageDescription strictBs of
+        Left _ -> do
+          putChar 'x'
+          hFlush stdout
+          return agg
+        Right gpd -> do
+          putChar '.'
+          hFlush stdout
+          return $ Map.insert (packageId gpd) gpd agg
 
   | otherwise = do
       putChar 'x'
@@ -80,6 +88,9 @@ loadGlobalDatabase = do
   gpdMap <- liftIO $ foldEntriesM loadPackageDescriptions Map.empty entries'
   let gpdHakeMap = splitPackageIdentifiers gpdMap
   state (\ x -> ((), x{hakeSolverGenDesc = gpdHakeMap}))
+
+mkDep :: String -> Dependency
+mkDep name = mkDependency (mkPackageName name) anyVersion (NES.singleton defaultLibName)
 
 query :: Z3 (Result, Maybe String)
 query = do
@@ -102,15 +113,15 @@ main = do
         ghcFlag <- getGlobalConfVar (Impl GHC anyVersion)
         assert ghcFlag
 
-        Just x <- getDependency $ Dependency (PackageName "Coroutine") anyVersion
+        Just x <- getDependency $ mkDep "Coroutine"
         bs <- astToString x
         liftIO $ putStrLn bs
 
-        _b <- getDependency $ Dependency (PackageName "base") anyVersion
-        bns <- getDependencyNodes $ Dependency (PackageName "base") anyVersion
-        b <- getDistinctVersion $ Dependency (PackageName "base") anyVersion
-        bs <- astToString b
-        liftIO $ putStrLn bs
+        _b <- getDependency $ mkDep "base"
+        bns <- getDependencyNodes $ mkDep "base"
+        b <- getDistinctVersion $ mkDep "base"
+        bs' <- astToString b
+        liftIO $ putStrLn bs'
 
         assert b
         assert x

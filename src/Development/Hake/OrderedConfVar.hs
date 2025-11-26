@@ -1,6 +1,6 @@
 module Development.Hake.OrderedConfVar where
 
-import Distribution.PackageDescription (ConfVar(..))
+import Distribution.Types.ConfVar (ConfVar(..))
 
 data OrderedConfVar = OrderedConfVar ConfVar deriving Eq
 
@@ -11,7 +11,7 @@ instance Ord OrderedConfVar where
       (OS     _,        _) -> LT
       (Arch   x, Arch   y) -> compare x y
       (Arch   _,        _) -> LT
-      (Flag   x, Flag   y) -> compare x y
-      (Flag   _,        _) -> LT
+      (PackageFlag x, PackageFlag y) -> compare x y
+      (PackageFlag _,        _) -> LT
       (Impl x _, Impl y _) -> compare x y
       (Impl _ _,        _) -> LT
